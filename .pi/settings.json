@@ -1,0 +1,7 @@
+{
+  "defaultProvider": "openrouter",
+  "defaultModel": "openrouter/free",
+  "packages": [
+    "npm:pi-web-access"
+  ]
+}
