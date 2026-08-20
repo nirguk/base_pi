@@ -1,0 +1,5 @@
+node_modules/
+.pi/
+.devcontainer-lock.json
+.DS_Store
+*.log

@@ -1,0 +1,24 @@
+{
+  "name": "Ubuntu & Node (Cached)",
+  "build": {
+    "context": ".",
+    "dockerfile": "Dockerfile"
+  },
+  "remoteUser": "root",
+  "mounts": [],
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "26"
+    }
+  },
+  "postCreateCommand": "./.devcontainer/setup.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": []
+    }
+  },
+  "containerEnv": {
+    "GEMINI_API_KEY": "${localEnv:GEMINI_API_KEY}",
+    "OPENROUTER_API_KEY": "${localEnv:OPENROUTER_API_KEY}"
+  }
+}
