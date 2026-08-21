@@ -1,6 +1,6 @@
 {
   "defaultProvider": "openrouter",
-  "defaultModel": "openrouter/free",
+  "defaultModel": "stealth/ox-alpha",
   "packages": [
     "npm:pi-web-access"
   ],
