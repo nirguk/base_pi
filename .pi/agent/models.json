@@ -1,0 +1,29 @@
+{
+  "providers": {
+    "inception": {
+      "baseUrl": "https://api.inceptionlabs.ai/v1",
+      "api": "openai-completions",
+      "apiKey": "$INCEPTION_API_KEY",
+      "authHeader": true,
+      "models": [
+        {
+          "id": "mercury-2",
+          "name": "Inception Mercury 2",
+          "reasoning": true,
+          "input": ["text"],
+          "compat": {
+            "supportsDeveloperRole": false
+          },
+          "contextWindow": 128000,
+          "maxTokens": 50000,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        }
+      ]
+    }
+  }
+}
