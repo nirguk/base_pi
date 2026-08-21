@@ -3,5 +3,9 @@
   "defaultModel": "openrouter/free",
   "packages": [
     "npm:pi-web-access"
+  ],
+  "skills": [],
+  "extensions": [
+    "./extensions/openrouter-free-analysis.ts"
   ]
 }
