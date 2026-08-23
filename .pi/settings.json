@@ -1,8 +1,20 @@
 {
   "defaultProvider": "openrouter",
-  "defaultModel": "stealth/ox-alpha",
+  "defaultModel": "openrouter/poolside/laguna-s-2.1",
+  "subagents": {
+    "defaultProvider": "openrouter",
+    "agentOverrides": {
+      "oracle":     { "model": "openrouter/poolside/laguna-s-2.1" },
+      "reviewer":   { "model": "openrouter/poolside/laguna-s-2.1" },
+      "worker":     { "model": "openrouter/inception/mercury-2" },
+      "researcher": { "model": "openrouter/inclusionai/ling-3.0-flash" },
+      "scout":      { "model": "openrouter/inclusionai/ling-3.0-flash" },
+      "delegate":   { "model": "inherit" }
+    }
+  },
   "packages": [
-    "npm:pi-web-access"
+    "npm:pi-web-access",
+    "npm:pi-subagents"
   ],
   "skills": [],
   "extensions": [
