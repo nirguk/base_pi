@@ -1,14 +1,14 @@
 {
   "defaultProvider": "openrouter",
-  "defaultModel": "openrouter/poolside/laguna-s-2.1",
+  "defaultModel": "deepseek/deepseek-v4-flash",
   "subagents": {
     "defaultProvider": "openrouter",
     "agentOverrides": {
-      "oracle":     { "model": "openrouter/poolside/laguna-s-2.1" },
-      "reviewer":   { "model": "openrouter/poolside/laguna-s-2.1" },
-      "worker":     { "model": "openrouter/inception/mercury-2" },
-      "researcher": { "model": "openrouter/inclusionai/ling-3.0-flash" },
-      "scout":      { "model": "openrouter/inclusionai/ling-3.0-flash" },
+      "oracle":     { "model": "deepseek/deepseek-v4-flash" },
+      "reviewer":   { "model": "deepseek/deepseek-v4-flash" },
+      "worker":     { "model": "inclusionai/ling-3.0-flash" },
+      "researcher": { "model": "inclusionai/ling-3.0-flash" },
+      "scout":      { "model": "inclusionai/ling-3.0-flash" },
       "delegate":   { "model": "inherit" }
     }
   },
@@ -16,8 +16,12 @@
     "npm:pi-web-access",
     "npm:pi-subagents"
   ],
-  "skills": [],
+  "skills": [
+    "s",
+    "./skills/findtree"
+  ],
   "extensions": [
-    "./extensions/openrouter-free-analysis.ts"
+    "./extensions/openrouter-free-analysis.ts",
+    "./extensions/findtree.ts"
   ]
 }
