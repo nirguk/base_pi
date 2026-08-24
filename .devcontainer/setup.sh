@@ -30,4 +30,17 @@ fi
 echo "[setup] Installing Pi.dev extensions..."
 pi install npm:pi-web-access -l --approve
 
+echo "[setup] Configuring VS Code to pass Ctrl+P through to terminal..."
+mkdir -p ~/.config/Code/User
+cat > ~/.config/Code/User/keybindings.json <<'KBEOF'
+[
+  {
+    "key": "ctrl+p",
+    "command": "workbench.action.terminal.sendSequence",
+    "args": { "text": "\u001b[27;5;16~" },
+    "when": "terminalFocus && !terminalFindWidgetVisible"
+  }
+]
+KBEOF
+
 echo "[setup] Pi.dev environment ready."
