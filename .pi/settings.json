@@ -1,6 +1,12 @@
 {
   "defaultProvider": "openrouter",
   "defaultModel": "deepseek/deepseek-v4-flash",
+  "enabledModels": [
+    "deepseek/deepseek-v4-flash",
+    "inclusionai/ling-3.0-flash",
+    "openrouter/stealth/ox-alpha",
+    "openrouter/inception/*"
+  ],
   "subagents": {
     "defaultProvider": "openrouter",
     "agentOverrides": {
