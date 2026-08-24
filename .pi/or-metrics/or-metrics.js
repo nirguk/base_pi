@@ -11,10 +11,12 @@
  *   • agentic_index      — agentic/tool-use ability
  *
  * Derived measures (higher = more ability per dollar):
- *   • coding-IPP  = coding_index / blended_cost
- *   • agentic-IPP = agentic_index / blended_cost
- *   • blended-IPP = (coding×0.5 + agentic×0.5) / blended_cost
- *   • cached-IPP  = blended-IPP using cached blended cost (70% cache-hit default)
+ *   • BlndCd (blndcod)  = coding_index / blended_cost  (Coding, blended pricing)
+ *   • BlndAg (blndagnt)  = agentic_index / blended_cost  (Agentic, blended pricing)
+ *   • CachCd (cachcod)   = coding_index / cached_blended_cost  (Coding, cached pricing)
+ *   • CachAg (cachagt)   = agentic_index / cached_blended_cost  (Agentic, cached pricing)
+ *   • BlndAv (blnd)      = (BlndCd + BlndAg) / 2  (combined w/ blended costs)
+ *   • CachAv (cach)      = (CachCd + CachAg) / 2  (combined w/ cached costs)
  *
  * Set OR_CACHE_RATE env var to override the cache-hit assumption (default 0.7).
  *
@@ -69,19 +71,54 @@ function fetchJSON(url, headers = {}) {
   });
 }
 
+function columnPrecision(values, fallback) {
+  fallback = fallback || 4;
+  let max = fallback;
+  for (const v of values) {
+    if (v == null) continue;
+    const abs = Math.abs(v);
+    if (abs === 0) continue;
+    if (abs < 0.01) { if (6 > max) max = 6; }
+    else if (abs < 1) { if (4 > max) max = 4; }
+    else if (abs < 10) { if (3 > max) max = 3; }
+    else if (abs < 100) { if (2 > max) max = 2; }
+    else if (1 > max) max = 1;
+  }
+  return max;
+}
+
+function ippPrecision(values, fallback) {
+  fallback = fallback || 2;
+  let max = fallback;
+  for (const v of values) {
+    if (v == null) continue;
+    const abs = Math.abs(v);
+    if (abs === 0) continue;
+    if (abs < 0.1) { if (4 > max) max = 4; }
+    else if (abs < 1) { if (3 > max) max = 3; }
+    else if (abs < 10) { if (2 > max) max = 2; }
+    else if (1 > max) max = 1;
+  }
+  return max;
+}
+
 const fmt = {
   pct(v) { return v == null ? '—' : (v).toFixed(1) + '%'; },
-  cost(v) {
+  cost(v, dec) {
     if (v == null) return '—';
+    if (dec != null) return '$' + v.toFixed(dec);
     const s = v.toFixed(v < 0.01 ? 5 : v < 1 ? 3 : v < 10 ? 2 : 1);
     return '$' + s.replace(/\.?0+$/, '');
   },
-  ipp(v) {
+  ipp(v, dec) {
     if (v == null) return '  —  ';
+    if (dec != null) return v.toFixed(dec).padStart(6);
     return (v > 1000 ? v.toFixed(0) : v > 100 ? v.toFixed(1) : v.toFixed(2)).padStart(6);
   },
   pad(s, n) { s = String(s); return s.length >= n ? s.slice(0, n) : s + ' '.repeat(n - s.length); },
   padL(s, n) { s = String(s); return s.length >= n ? s : ' '.repeat(n - s.length) + s; },
+  columnPrecision,
+  ippPrecision,
 };
 
 // ─── Data Fetching ─────────────────────────────────────────────────────────────
@@ -128,11 +165,13 @@ function analyzeModels(models) {
     const agentic = aa.agentic_index;
     const intelligence = aa.intelligence_index;
 
-    const codingIPP = coding != null && blended > 0 ? coding / blended : null;
-    const agenticIPP = agentic != null && blended > 0 ? agentic / blended : null;
-    const blendedIPP = (coding != null && agentic != null && blended > 0)
+    const blndcod = coding != null && blended > 0 ? coding / blended : null;
+    const blndagnt = agentic != null && blended > 0 ? agentic / blended : null;
+    const cachcod = coding != null && blendedCached > 0 ? coding / blendedCached : null;
+    const cachagt = agentic != null && blendedCached > 0 ? agentic / blendedCached : null;
+    const blnd = (coding != null && agentic != null && blended > 0)
       ? (coding * 0.5 + agentic * 0.5) / blended : null;
-    const blendedIPPcached = (coding != null && agentic != null && blendedCached > 0)
+    const cach = (coding != null && agentic != null && blendedCached > 0)
       ? (coding * 0.5 + agentic * 0.5) / blendedCached : null;
 
     entries.push({
@@ -151,10 +190,12 @@ function analyzeModels(models) {
         agentic,
       },
       ipp: {
-        coding: codingIPP,
-        agentic: agenticIPP,
-        blended: blendedIPP,
-        cached: blendedIPPcached,
+        blndcod,
+        blndagnt,
+        cachcod,
+        cachagt,
+        blnd,
+        cach,
       },
       context_length: m.context_length || null,
       created: m.created ? new Date(m.created * 1000).toISOString().slice(0, 10) : null,
@@ -207,54 +248,62 @@ function findNotable(entries) {
   });
 
   // --- Best ability-per-price ---
-  const byCodingIPP = [...entries].filter(e => e.ipp.coding != null)
-    .sort((a, b) => (b.ipp.coding || 0) - (a.ipp.coding || 0));
+  const byCodingIPP = [...entries].filter(e => e.ipp.blndcod != null)
+    .sort((a, b) => (b.ipp.blndcod || 0) - (a.ipp.blndcod || 0));
   notable.push({
-    category: '💰 Best Coding Ability-Per-Price (Coding IPP)',
+    category: '💰 Best Coding Ability-Per-Price (Blended base, BlndCd)',
     models: byCodingIPP.slice(0, 5).map(e => ({
-      name: e.name, ipp: e.ipp.coding, coding: e.indices.coding, blended: e.pricing.blended,
+      name: e.name, ipp: e.ipp.blndcod, coding: e.indices.coding, blended: e.pricing.blended,
     })),
   });
 
-  const byAgenticIPP = [...entries].filter(e => e.ipp.agentic != null)
-    .sort((a, b) => (b.ipp.agentic || 0) - (a.ipp.agentic || 0));
+  const byAgenticIPP = [...entries].filter(e => e.ipp.blndagnt != null)
+    .sort((a, b) => (b.ipp.blndagnt || 0) - (a.ipp.blndagnt || 0));
   notable.push({
-    category: '🤖 Best Agentic Ability-Per-Price (Agentic IPP)',
+    category: '🤖 Best Agentic Ability-Per-Price (Blended base, BlndAg)',
     models: byAgenticIPP.slice(0, 5).map(e => ({
-      name: e.name, ipp: e.ipp.agentic, agentic: e.indices.agentic, blended: e.pricing.blended,
+      name: e.name, ipp: e.ipp.blndagnt, agentic: e.indices.agentic, blended: e.pricing.blended,
     })),
   });
 
   // --- Best cached IPP ---
-  const byCachedIPP = [...entries].filter(e => e.ipp.cached != null)
-    .sort((a, b) => (b.ipp.cached || 0) - (a.ipp.cached || 0));
+  const byCachedCodIPP = [...entries].filter(e => e.ipp.cachcod != null)
+    .sort((a, b) => (b.ipp.cachcod || 0) - (a.ipp.cachcod || 0));
   notable.push({
-    category: '🔄 Best Cached IPP (70% cache-hit assumed) — export OR_CACHE_RATE to tune',
-    models: byCachedIPP.slice(0, 5).map(e => ({
-      name: e.name, ipp: e.ipp.cached, coding: e.indices.coding, agentic: e.indices.agentic,
-      cached_blended: e.pricing.blendedCached,
+    category: '🔄 Best Cached Coding IPP (70% cache-hit assumed, CachCd)',
+    models: byCachedCodIPP.slice(0, 5).map(e => ({
+      name: e.name, ipp: e.ipp.cachcod, coding: e.indices.coding, cached_blended: e.pricing.blendedCached,
     })),
   });
 
-  const byBlendedIPP = [...entries].filter(e => e.ipp.blended != null)
-    .sort((a, b) => (b.ipp.blended || 0) - (a.ipp.blended || 0));
+  const byCachedAgtIPP = [...entries].filter(e => e.ipp.cachagt != null)
+    .sort((a, b) => (b.ipp.cachagt || 0) - (a.ipp.cachagt || 0));
   notable.push({
-    category: '⚖️ Best Combined Ability-Per-Price (Blended IPP, 50/50)',
+    category: '🔄 Best Cached Agentic IPP (70% cache-hit assumed, CachAg)',
+    models: byCachedAgtIPP.slice(0, 5).map(e => ({
+      name: e.name, ipp: e.ipp.cachagt, agentic: e.indices.agentic, cached_blended: e.pricing.blendedCached,
+    })),
+  });
+
+  const byBlendedIPP = [...entries].filter(e => e.ipp.blnd != null)
+    .sort((a, b) => (b.ipp.blnd || 0) - (a.ipp.blnd || 0));
+  notable.push({
+    category: '⚖️ Best Combined Ability-Per-Price (Blended, 50/50, BlndAv)',
     models: byBlendedIPP.slice(0, 5).map(e => ({
-      name: e.name, ipp: e.ipp.blended, coding: e.indices.coding, agentic: e.indices.agentic, blended: e.pricing.blended,
+      name: e.name, ipp: e.ipp.blnd, coding: e.indices.coding, agentic: e.indices.agentic, blended: e.pricing.blended,
     })),
   });
 
   // --- Worst value among models with meaningful ability ---
   const meaningful = entries.filter(e =>
     (e.indices.coding != null && e.indices.coding >= 15) &&
-    e.ipp.blended != null
+    e.ipp.blnd != null
   );
-  const worstValue = [...meaningful].sort((a, b) => (a.ipp.blended || 999) - (b.ipp.blended || 999));
+  const worstValue = [...meaningful].sort((a, b) => (a.ipp.blnd || 999) - (b.ipp.blnd || 999));
   notable.push({
-    category: '⚠️ Worst Value Among Usable Models (lowest Blended IPP, ≥15 coding)',
+    category: '⚠️ Worst Value Among Usable Models (lowest BlndAv, ≥15 coding)',
     models: worstValue.slice(0, 3).map(e => ({
-      name: e.name, ipp: e.ipp.blended, coding: e.indices.coding, blended: e.pricing.blended,
+      name: e.name, ipp: e.ipp.blnd, coding: e.indices.coding, blended: e.pricing.blended,
     })),
   });
 
@@ -264,7 +313,7 @@ function findNotable(entries) {
   notable.push({
     category: '💵 Cheapest Models with Strong Agentic Ability (agentic ≥50)',
     models: highAgentic.slice(0, 5).map(e => ({
-      name: e.name, agentic: e.indices.agentic, blended: e.pricing.blended, ipp: e.ipp.agentic,
+      name: e.name, agentic: e.indices.agentic, blended: e.pricing.blended, ipp: e.ipp.blndagnt,
     })),
   });
 
@@ -274,7 +323,7 @@ function findNotable(entries) {
   notable.push({
     category: '💵 Cheapest Models with Strong Coding Ability (coding ≥60)',
     models: highCoding.slice(0, 5).map(e => ({
-      name: e.name, coding: e.indices.coding, blended: e.pricing.blended, ipp: e.ipp.coding,
+      name: e.name, coding: e.indices.coding, blended: e.pricing.blended, ipp: e.ipp.blndcod,
     })),
   });
 
@@ -300,10 +349,12 @@ function snapshot(entries) {
       intelligence_index: e.indices.intelligence,
       blended_cost_per_m: e.pricing.blended,
       blended_cached_per_m: e.pricing.blendedCached,
-      coding_ipp: e.ipp.coding,
-      agentic_ipp: e.ipp.agentic,
-      blended_ipp: e.ipp.blended,
-      cached_ipp: e.ipp.cached,
+      blndcod: e.ipp.blndcod,
+      blndagnt: e.ipp.blndagnt,
+      cachcod: e.ipp.cachcod,
+      cachagt: e.ipp.cachagt,
+      blnd: e.ipp.blnd,
+      cach: e.ipp.cach,
     })),
   };
 
@@ -356,9 +407,24 @@ function diffSnapshots() {
 
 function renderScoped(scoped) {
   const lines = [];
-  lines.push('┌─ Our Scoped Models — OR Metrics ────────────────────────────────────────────────────┐');
-  lines.push('│ Model              Intel  Coding Agentic  Base$/M  CodIPP  AgtIPP  BlnIPP  CchIPP│');
-  lines.push('│───────────────────┄──────┄───────┄───────┄────────┄──────┄───────┄───────┄───────│');
+
+  // Column precision
+  const costVals = [];
+  const ipCols = [[], [], [], []]; // blndcod, blndagnt, cachcod, cachagt
+  scoped.forEach(s => {
+    if (!s.entry) return;
+    costVals.push(s.entry.pricing.blended);
+    ipCols[0].push(s.entry.ipp.blndcod);
+    ipCols[1].push(s.entry.ipp.blndagnt);
+    ipCols[2].push(s.entry.ipp.cachcod);
+    ipCols[3].push(s.entry.ipp.cachagt);
+  });
+  const costDec = columnPrecision(costVals, 4);
+  const ipDecs = ipCols.map(c => ippPrecision(c, 2));
+
+  lines.push('┌─ Our Scoped Models — OR Metrics ─────────────────────────────────────────────────────────┐');
+  lines.push('│ Model              Intel  Coding Agentic  Base$/M    BlndCd  BlndAg  CachCd  CachAg│');
+  lines.push('│───────────────────┄──────┄───────┄───────┄──────────┄────────┄───────┄───────┄───────│');
 
   scoped.forEach(s => {
     const name = fmt.pad(s.label, 18);
@@ -370,14 +436,14 @@ function renderScoped(scoped) {
     const intel = e.indices.intelligence != null ? fmt.padL(e.indices.intelligence.toFixed(1), 5) : '  —  ';
     const coding = e.indices.coding != null ? fmt.padL(e.indices.coding.toFixed(1), 5) : '  —  ';
     const agentic = e.indices.agentic != null ? fmt.padL(e.indices.agentic.toFixed(1), 5) : '  —  ';
-    const blended = fmt.cost(e.pricing.blended).padStart(8);
-    const cIPP = fmt.ipp(e.ipp.coding).padStart(6);
-    const aIPP = fmt.ipp(e.ipp.agentic).padStart(7);
-    const bIPP = fmt.ipp(e.ipp.blended).padStart(7);
-    const cachedIPP = fmt.ipp(e.ipp.cached).padStart(7);
-    lines.push(`│ ${name} ${intel}  ${coding}  ${agentic}  ${blended}  ${cIPP}  ${aIPP}  ${bIPP}  ${cachedIPP} │`);
+    const blended = fmt.cost(e.pricing.blended, costDec).padStart(10);
+    const bc = fmt.ipp(e.ipp.blndcod, ipDecs[0]).padStart(7);
+    const ba = fmt.ipp(e.ipp.blndagnt, ipDecs[1]).padStart(7);
+    const cc = fmt.ipp(e.ipp.cachcod, ipDecs[2]).padStart(7);
+    const ca = fmt.ipp(e.ipp.cachagt, ipDecs[3]).padStart(7);
+    lines.push(`│ ${name} ${intel}  ${coding}  ${agentic}  ${blended}  ${bc}  ${ba}  ${cc}  ${ca} │`);
   });
-  lines.push('└────────────────────────────────────────────────────────────────────────────┘');
+  lines.push('└──────────────────────────────────────────────────────────────────────────────┘');
   return lines.join('\n');
 }
 
@@ -410,8 +476,9 @@ function renderFull(entries, scoped, notable) {
   lines.push(`║     Models with AA data: ${entries.length} · ${new Date().toISOString().slice(0,10)}         ║`);
   lines.push(`╚══════════════════════════════════════════════════════════════════════════════╝`);
   lines.push('');
-  lines.push('Measures:  Coding-IPP = coding_index ÷ blended_80/20 $/M  |  Agentic-IPP = agentic_index ÷ blended');
-  lines.push('           Blended-IPP = (coding×0.5 + agentic×0.5) ÷ blended  |  Cached-IPP = blended-IPP using cached pricing');
+  lines.push('Measures:  BlndCd = coding_index ÷ blended_80/20 $/M  |  BlndAg = agentic_index ÷ blended');
+  lines.push('           CachCd = coding_index ÷ cached_80/20 $/M    |  CachAg = agentic_index ÷ cached');
+  lines.push('           BlndAv = (BlndCd + BlndAg)/2  |  CachAv = (CachCd + CachAg)/2  (combined 50/50 averages)');
   lines.push(`           Cache rate: ${(DEFAULT_CACHE_RATE * 100).toFixed(0)}% hit (set OR_CACHE_RATE env to tune)`);
   lines.push('');
 
@@ -421,23 +488,41 @@ function renderFull(entries, scoped, notable) {
   lines.push('');
 
   // Full rankings — Top 20 by blended IPP
-  const ranked = [...entries].filter(e => e.ipp.blended != null)
-    .sort((a, b) => (b.ipp.blended || 0) - (a.ipp.blended || 0));
+  const ranked = [...entries].filter(e => e.ipp.blnd != null)
+    .sort((a, b) => (b.ipp.blnd || 0) - (a.ipp.blnd || 0));
 
-  lines.push('┌─ Top 30 by Blended Ability-Per-Price (Coding/Agentic 50/50) ─────────────────┐');
-  lines.push('│Rank Model                     Intel Coding Agent  $/M    CodIPP AgtIPP BlnIPP CchIPP│');
+  // Column precision
+  const costVals = ranked.map(e => e.pricing.blended);
+  const costDec = columnPrecision(costVals, 4);
+  const bcVals = ranked.map(e => e.ipp.blndcod);
+  const baVals = ranked.map(e => e.ipp.blndagnt);
+  const ccVals = ranked.map(e => e.ipp.cachcod);
+  const caVals = ranked.map(e => e.ipp.cachagt);
+  const bVals = ranked.map(e => e.ipp.blnd);
+  const cVals = ranked.map(e => e.ipp.cach);
+  const bcDec = ippPrecision(bcVals, 2);
+  const baDec = ippPrecision(baVals, 2);
+  const ccDec = ippPrecision(ccVals, 2);
+  const caDec = ippPrecision(caVals, 2);
+  const bDec = ippPrecision(bVals, 2);
+  const cDec = ippPrecision(cVals, 2);
+
+  lines.push('┌─ Top 30 by Blended Ability-Per-Price (BlndAv = BlndCd/BlndAg 50/50) ────────────┐');
+  lines.push('│Rank Model                     Intel Coding Agent  $M/M    BlndCd BlndAg CachCd CachAg BlndAv CachAv│');
   ranked.slice(0, 30).forEach((e, i) => {
     const rank = (i + 1).toString().padStart(2);
     const name = fmt.pad(e.name.length > 25 ? e.name.slice(0, 23) + '…' : e.name, 25);
     const intel = e.indices.intelligence != null ? fmt.padL(e.indices.intelligence.toFixed(0), 4) : '  — ';
     const coding = e.indices.coding != null ? fmt.padL(e.indices.coding.toFixed(0), 4) : '  — ';
     const agentic = e.indices.agentic != null ? fmt.padL(e.indices.agentic.toFixed(0), 4) : '  — ';
-    const blended = fmt.cost(e.pricing.blended).padStart(6);
-    const cIPP = fmt.ipp(e.ipp.coding).padStart(6);
-    const aIPP = fmt.ipp(e.ipp.agentic).padStart(6);
-    const bIPP = fmt.ipp(e.ipp.blended).padStart(6);
-    const cchIPP = fmt.ipp(e.ipp.cached).padStart(6);
-    lines.push(`│ ${rank} ${name} ${intel} ${coding} ${agentic} ${blended} ${cIPP} ${aIPP} ${bIPP} ${cchIPP} │`);
+    const blended = fmt.cost(e.pricing.blended, costDec).padStart(6);
+    const bc = fmt.ipp(e.ipp.blndcod, bcDec).padStart(6);
+    const ba = fmt.ipp(e.ipp.blndagnt, baDec).padStart(6);
+    const cc = fmt.ipp(e.ipp.cachcod, ccDec).padStart(6);
+    const ca = fmt.ipp(e.ipp.cachagt, caDec).padStart(6);
+    const ba_ = fmt.ipp(e.ipp.blnd, bDec).padStart(7);
+    const ca_ = fmt.ipp(e.ipp.cach, cDec).padStart(7);
+    lines.push(`│ ${rank} ${name} ${intel} ${coding} ${agentic} ${blended} ${bc} ${ba} ${cc} ${ca} ${ba_} ${ca_} │`);
   });
   lines.push('└──────────────────────────────────────────────────────────────────────────────┘');
   lines.push('');
@@ -445,18 +530,20 @@ function renderFull(entries, scoped, notable) {
   // Also show bottom
   const bottom = ranked.slice(-10).reverse();
   lines.push('┌─ Bottom 10 by Blended IPP (lowest ability-per-price) ─────────────────────────┐');
-  lines.push('│ Model                     Intel Coding Agent  $/M    CodIPP AgtIPP BlnIPP CchIPP│');
+  lines.push('│ Model                     Intel Coding Agent  $M/M    BlndCd BlndAg CachCd CachAg BlndAv CachAv│');
   bottom.forEach(e => {
     const name = fmt.pad(e.name.length > 25 ? e.name.slice(0, 23) + '…' : e.name, 25);
     const intel = e.indices.intelligence != null ? fmt.padL(e.indices.intelligence.toFixed(0), 4) : '  — ';
     const coding = e.indices.coding != null ? fmt.padL(e.indices.coding.toFixed(0), 4) : '  — ';
     const agentic = e.indices.agentic != null ? fmt.padL(e.indices.agentic.toFixed(0), 4) : '  — ';
-    const blended = fmt.cost(e.pricing.blended).padStart(6);
-    const cIPP = fmt.ipp(e.ipp.coding).padStart(6);
-    const aIPP = fmt.ipp(e.ipp.agentic).padStart(6);
-    const bIPP = fmt.ipp(e.ipp.blended).padStart(6);
-    const cchIPP = fmt.ipp(e.ipp.cached).padStart(6);
-    lines.push(`│ ${name} ${intel} ${coding} ${agentic} ${blended} ${cIPP} ${aIPP} ${bIPP} ${cchIPP} │`);
+    const blended = fmt.cost(e.pricing.blended, costDec).padStart(6);
+    const bc = fmt.ipp(e.ipp.blndcod, bcDec).padStart(6);
+    const ba = fmt.ipp(e.ipp.blndagnt, baDec).padStart(6);
+    const cc = fmt.ipp(e.ipp.cachcod, ccDec).padStart(6);
+    const ca = fmt.ipp(e.ipp.cachagt, caDec).padStart(6);
+    const ba_ = fmt.ipp(e.ipp.blnd, bDec).padStart(7);
+    const ca_ = fmt.ipp(e.ipp.cach, cDec).padStart(7);
+    lines.push(`│ ${name} ${intel} ${coding} ${agentic} ${blended} ${bc} ${ba} ${cc} ${ca} ${ba_} ${ca_} │`);
   });
   lines.push('└──────────────────────────────────────────────────────────────────────────────┘');
 
@@ -555,8 +642,8 @@ async function main() {
         category: n.category,
         models: n.models,
       })),
-      top_by_blended_ipp: entries.filter(e => e.ipp.blended != null)
-        .sort((a, b) => (b.ipp.blended || 0) - (a.ipp.blended || 0))
+      top_by_blended_ipp: entries.filter(e => e.ipp.blnd != null)
+        .sort((a, b) => (b.ipp.blnd || 0) - (a.ipp.blnd || 0))
         .slice(0, 20)
         .map(e => ({
           name: e.name,
@@ -565,10 +652,12 @@ async function main() {
           agentic: e.indices.agentic,
           blended_cost: e.pricing.blended,
           blended_cached_cost: e.pricing.blendedCached,
-          coding_ipp: e.ipp.coding,
-          agentic_ipp: e.ipp.agentic,
-          blended_ipp: e.ipp.blended,
-          cached_ipp: e.ipp.cached,
+          blndcod: e.ipp.blndcod,
+          blndagnt: e.ipp.blndagnt,
+          cachcod: e.ipp.cachcod,
+          cachagt: e.ipp.cachagt,
+          blnd: e.ipp.blnd,
+          cach: e.ipp.cach,
         })),
       diff: diff ? {
         added: diff.added,

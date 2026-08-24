@@ -33,12 +33,8 @@ const SNAPSHOT_DIR = path.join(
 );
 const DEFAULT_CACHE_RATE = parseFloat(process.env.OR_CACHE_RATE || "0.7");
 
-const SCOPED_SLUGS = [
-  { slug: "inclusionai/ling-3.0-flash", label: "Ling 3.0 Flash" },
-  { slug: "stealth/ox-alpha",            label: "Ox Alpha" },
-  { slug: "inception/mercury-2",         label: "Mercury 2" },
-  { slug: "deepseek/deepseek-v4-flash",  label: "DeepSeek V4 Flash" },
-];
+// Populated from ctx.scopedModels at session start
+let activeScopedSlugs: { slug: string; label: string }[] = [];
 
 // ─── HTTP Fetch ────────────────────────────────────────────────────────────────
 
@@ -92,11 +88,13 @@ function analyzeModels(models: any[]) {
     const agentic = aa.agentic_index;
     const intelligence = aa.intelligence_index;
 
-    const codingIPP = coding != null && blended > 0 ? coding / blended : null;
-    const agenticIPP = agentic != null && blended > 0 ? agentic / blended : null;
-    const blendedIPP = (coding != null && agentic != null && blended > 0)
+    const blndcod = coding != null && blended > 0 ? coding / blended : null;
+    const blndagnt = agentic != null && blended > 0 ? agentic / blended : null;
+    const cachcod = coding != null && blendedCached > 0 ? coding / blendedCached : null;
+    const cachagt = agentic != null && blendedCached > 0 ? agentic / blendedCached : null;
+    const blnd = (coding != null && agentic != null && blended > 0)
       ? (coding * 0.5 + agentic * 0.5) / blended : null;
-    const cachedIPP = (coding != null && agentic != null && blendedCached > 0)
+    const cach = (coding != null && agentic != null && blendedCached > 0)
       ? (coding * 0.5 + agentic * 0.5) / blendedCached : null;
 
     entries.push({
@@ -104,14 +102,14 @@ function analyzeModels(models: any[]) {
       name: m.name || m.id,
       pricing: { input: pricing.input, output: pricing.output, cacheRead: pricing.cacheRead, blended, blendedCached },
       indices: { intelligence, coding, agentic },
-      ipp: { coding: codingIPP, agentic: agenticIPP, blended: blendedIPP, cached: cachedIPP },
+      ipp: { blndcod, blndagnt, cachcod, cachagt, blnd, cach },
     });
   }
   return entries;
 }
 
-function findScoped(entries: any[]) {
-  return SCOPED_SLUGS.map((s) => {
+function findScoped(entries: any[], slugs: { slug: string; label: string }[]) {
+  return slugs.map((s) => {
     const e = entries.find((x: any) => x.slug === s.slug);
     return { ...s, entry: e || null, found: !!e };
   });
@@ -164,10 +162,12 @@ function snapshotAndDiff(entries: any[]) {
       intelligence_index: e.indices.intelligence,
       blended_cost_per_m: e.pricing.blended,
       blended_cached_per_m: e.pricing.blendedCached,
-      coding_ipp: e.ipp.coding,
-      agentic_ipp: e.ipp.agentic,
-      blended_ipp: e.ipp.blended,
-      cached_ipp: e.ipp.cached,
+      blndcod: e.ipp.blndcod,
+      blndagnt: e.ipp.blndagnt,
+      cachcod: e.ipp.cachcod,
+      cachagt: e.ipp.cachagt,
+      blnd: e.ipp.blnd,
+      cach: e.ipp.cach,
     })),
   };
   fs.writeFileSync(latestPath, JSON.stringify(payload, null, 2));
@@ -233,56 +233,104 @@ function findNotable(entries: any[]) {
     .sort((a, b) => (b.indices.coding || 0) - (a.indices.coding || 0));
   notable.push({ category: "💻 Best Coding Ability (raw)", models: byCoding.slice(0, 5).map((e) => ({ name: e.name, v: e.indices.coding })) });
 
-  const byBlendedIPP = [...entries].filter((e) => e.ipp.blended != null)
-    .sort((a, b) => (b.ipp.blended || 0) - (a.ipp.blended || 0));
-  notable.push({ category: "💰 Best Blended IPP (ability-per-price)", models: byBlendedIPP.slice(0, 5).map((e) => ({ name: e.name, v: e.ipp.blended })) });
+  const byBlendedIPP = [...entries].filter((e) => e.ipp.blnd != null)
+    .sort((a, b) => (b.ipp.blnd || 0) - (a.ipp.blnd || 0));
+  notable.push({ category: "💰 Best Blended IPP (ability-per-price, blended costs)", models: byBlendedIPP.slice(0, 5).map((e) => ({ name: e.name, v: e.ipp.blnd })) });
 
-  const byCachedIPP = [...entries].filter((e) => e.ipp.cached != null)
-    .sort((a, b) => (b.ipp.cached || 0) - (a.ipp.cached || 0));
-  notable.push({ category: "🔄 Best Cached IPP (70% cache assumed)", models: byCachedIPP.slice(0, 5).map((e) => ({ name: e.name, v: e.ipp.cached })) });
+  const byCachedIPP = [...entries].filter((e) => e.ipp.cach != null)
+    .sort((a, b) => (b.ipp.cach || 0) - (a.ipp.cach || 0));
+  notable.push({ category: "🔄 Best Cached IPP (70% cache assumed)", models: byCachedIPP.slice(0, 5).map((e) => ({ name: e.name, v: e.ipp.cach })) });
 
   return notable;
 }
 
 // ─── Display Helpers ────────────────────────────────────────────────────────────
 
+function columnPrecision(values: (number | null)[], fallback = 4): number {
+  let max = fallback;
+  for (const v of values) {
+    if (v == null) continue;
+    const abs = Math.abs(v);
+    if (abs === 0) continue;
+    if (abs < 0.01) { if (6 > max) max = 6; }
+    else if (abs < 1) { if (4 > max) max = 4; }
+    else if (abs < 10) { if (3 > max) max = 3; }
+    else if (abs < 100) { if (2 > max) max = 2; }
+    else if (1 > max) max = 1;
+  }
+  return max;
+}
+
 const FMT = {
   pct(v: number | null) { return v == null ? "—" : v.toFixed(1) + "%"; },
-  cost(v: number | null) {
+  cost(v: number | null, dec?: number) {
     if (v == null) return "—";
+    if (dec != null) return "$" + v.toFixed(dec);
     const s = v.toFixed(v < 0.01 ? 5 : v < 1 ? 3 : v < 10 ? 2 : 1);
     return "$" + s.replace(/\.?0+$/, "");
   },
-  ipp(v: number | null) {
+  ipp(v: number | null, dec?: number) {
     if (v == null) return "    —";
+    if (dec != null) return v.toFixed(dec).padStart(6);
     return (v > 1000 ? v.toFixed(0) : v > 100 ? v.toFixed(1) : v.toFixed(2)).padStart(6);
   },
   pad(s: string, n: number) { s = String(s); return s.length >= n ? s.slice(0, n) : s + " ".repeat(n - s.length); },
+  costPrecision: columnPrecision,
+  ippPrecision(values: (number | null)[], fallback = 2): number {
+    let max = fallback;
+    for (const v of values) {
+      if (v == null) continue;
+      const abs = Math.abs(v);
+      if (abs === 0) continue;
+      if (abs < 0.1) { if (4 > max) max = 4; }
+      else if (abs < 1) { if (3 > max) max = 3; }
+      else if (abs < 10) { if (2 > max) max = 2; }
+      else if (1 > max) max = 1;
+    }
+    return max;
+  },
 };
 
 function renderScoped(scoped: any[]) {
   const lines: string[] = [];
-  lines.push("┌─ Our Scoped Models ─────────────────────────────────────────────────────────────────────┐");
-  lines.push("│ Model              Intel  Coding Agentic  Base$/M  CodIPP  AgtIPP  BlnIPP  CchIPP│");
-  lines.push("│───────────────────┄──────┄───────┄───────┄────────┄───────┄───────┄───────┄───────│");
+
+  // Collect column values for precision alignment
+  const costVals: (number | null)[] = [];
+  const ipCols: (number | null)[][] = [[], [], [], []]; // blndcod, blndagnt, cachcod, cachagt
+  for (const s of scoped) {
+    if (!s.entry) continue;
+    const e = s.entry;
+    costVals.push(e.pricing.blended);
+    ipCols[0].push(e.ipp.blndcod);
+    ipCols[1].push(e.ipp.blndagnt);
+    ipCols[2].push(e.ipp.cachcod);
+    ipCols[3].push(e.ipp.cachagt);
+  }
+  const costDec = columnPrecision(costVals, 4);
+  const ippDec = FMT.ippPrecision(costVals.map(_ => 0).concat(...ipCols.filter(c => c.length > 0)), 2);
+  const ipDecs = ipCols.map(c => FMT.ippPrecision(c, 2));
+
+  lines.push("┌─ Our Scoped Models ──────────────────────────────────────────────────────────────────────────┐");
+  lines.push("│ Model              Intel  Coding Agentic  Base$/M    BlndCd  BlndAg  CachCd  CachAg│");
+  lines.push("│───────────────────┄──────┄───────┄───────┄──────────┄────────┄───────┄───────┄───────│");
   for (const s of scoped) {
     const name = FMT.pad(s.label, 18);
     if (!s.entry) {
-      lines.push(`│ ${name}  no data from OpenRouter                                          │`);
+      lines.push(`│ ${name}  no data from OpenRouter                                              │`);
       continue;
     }
     const e = s.entry;
     const intel = e.indices.intelligence != null ? e.indices.intelligence.toFixed(1).padStart(5) : "  —  ";
     const coding = e.indices.coding != null ? e.indices.coding.toFixed(1).padStart(5) : "  —  ";
     const agentic = e.indices.agentic != null ? e.indices.agentic.toFixed(1).padStart(5) : "  —  ";
-    const blended = FMT.cost(e.pricing.blended).padStart(8);
-    const cIPP = FMT.ipp(e.ipp.coding).padStart(6);
-    const aIPP = FMT.ipp(e.ipp.agentic).padStart(6);
-    const bIPP = FMT.ipp(e.ipp.blended).padStart(6);
-    const cachedIPP = FMT.ipp(e.ipp.cached).padStart(6);
-    lines.push(`│ ${name} ${intel}  ${coding}  ${agentic}  ${blended}  ${cIPP}  ${aIPP}  ${bIPP}  ${cachedIPP} │`);
+    const blended = FMT.cost(e.pricing.blended, costDec).padStart(10);
+    const bc = FMT.ipp(e.ipp.blndcod, ipDecs[0]).padStart(7);
+    const ba = FMT.ipp(e.ipp.blndagnt, ipDecs[1]).padStart(7);
+    const cc = FMT.ipp(e.ipp.cachcod, ipDecs[2]).padStart(7);
+    const ca = FMT.ipp(e.ipp.cachagt, ipDecs[3]).padStart(7);
+    lines.push(`│ ${name} ${intel}  ${coding}  ${agentic}  ${blended}  ${bc}  ${ba}  ${cc}  ${ca} │`);
   }
-  lines.push("└──────────────────────────────────────────────────────────────────────────────────────┘");
+  lines.push("└──────────────────────────────────────────────────────────────────────────────────────────┘");
   return lines.join("\n");
 }
 
@@ -303,26 +351,44 @@ function renderNotable(notable: any[]) {
 }
 
 function renderTop(entries: any[]) {
-  const ranked = [...entries].filter((e) => e.ipp.blended != null)
-    .sort((a, b) => (b.ipp.blended || 0) - (a.ipp.blended || 0));
+  const ranked = [...entries].filter((e) => e.ipp.blnd != null)
+    .sort((a, b) => (b.ipp.blnd || 0) - (a.ipp.blnd || 0));
+
+  // Column precision
+  const costVals = ranked.map(e => e.pricing.blended);
+  const costDec = columnPrecision(costVals, 4);
+  const bcVals = ranked.map(e => e.ipp.blndcod);
+  const baVals = ranked.map(e => e.ipp.blndagnt);
+  const ccVals = ranked.map(e => e.ipp.cachcod);
+  const caVals = ranked.map(e => e.ipp.cachagt);
+  const bVals = ranked.map(e => e.ipp.blnd);
+  const cVals = ranked.map(e => e.ipp.cach);
+  const bcDec = FMT.ippPrecision(bcVals, 2);
+  const baDec = FMT.ippPrecision(baVals, 2);
+  const ccDec = FMT.ippPrecision(ccVals, 2);
+  const caDec = FMT.ippPrecision(caVals, 2);
+  const bDec = FMT.ippPrecision(bVals, 2);
+  const cDec = FMT.ippPrecision(cVals, 2);
 
   const lines: string[] = [];
-  lines.push("┌─ Top 20 by Blended IPP ──────────────────────────────────────────────────────────────┐");
-  lines.push("│Rank Model                     Intel Coding Agent  $/M    CodIPP AgtIPP BlnIPP CchIPP│");
+  lines.push("┌─ Top 20 by Blended IPP ──────────────────────────────────────────────────────────────────┐");
+  lines.push("│Rank Model                     Intel Coding Agent  $M/M    BlndCd BlndAg CachCd CachAg BlndAv CachAv│");
   ranked.slice(0, 20).forEach((e, i) => {
     const rank = (i + 1).toString().padStart(2);
     const name = FMT.pad(e.name.length > 25 ? e.name.slice(0, 23) + "…" : e.name, 25);
     const intel = e.indices.intelligence != null ? e.indices.intelligence.toFixed(0).padStart(4) : "  — ";
     const coding = e.indices.coding != null ? e.indices.coding.toFixed(0).padStart(4) : "  — ";
     const agentic = e.indices.agentic != null ? e.indices.agentic.toFixed(0).padStart(4) : "  — ";
-    const blended = FMT.cost(e.pricing.blended).padStart(6);
-    const cIPP = FMT.ipp(e.ipp.coding).padStart(6);
-    const aIPP = FMT.ipp(e.ipp.agentic).padStart(6);
-    const bIPP = FMT.ipp(e.ipp.blended).padStart(6);
-    const cachedIPP = FMT.ipp(e.ipp.cached).padStart(6);
-    lines.push(`│ ${rank} ${name} ${intel} ${coding} ${agentic} ${blended} ${cIPP} ${aIPP} ${bIPP} ${cachedIPP} │`);
+    const blended = FMT.cost(e.pricing.blended, costDec).padStart(6);
+    const bc = FMT.ipp(e.ipp.blndcod, bcDec).padStart(6);
+    const ba = FMT.ipp(e.ipp.blndagnt, baDec).padStart(6);
+    const cc = FMT.ipp(e.ipp.cachcod, ccDec).padStart(6);
+    const ca = FMT.ipp(e.ipp.cachagt, caDec).padStart(6);
+    const ba_ = FMT.ipp(e.ipp.blnd, bDec).padStart(7);
+    const ca_ = FMT.ipp(e.ipp.cach, cDec).padStart(7);
+    lines.push(`│ ${rank} ${name} ${intel} ${coding} ${agentic} ${blended} ${bc} ${ba} ${cc} ${ca} ${ba_} ${ca_} │`);
   });
-  lines.push("└──────────────────────────────────────────────────────────────────────────────────────┘");
+  lines.push("└──────────────────────────────────────────────────────────────────────────────────────────┘");
   return lines.join("\n");
 }
 
@@ -387,7 +453,7 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.setStatus("or-metrics", "Fetching OR metrics…");
     try {
       const entries = await fetchORData(apiKey);
-      const scoped = findScoped(entries);
+      const scoped = findScoped(entries, activeScopedSlugs);
       const data = snapshotAndDiff(entries);
       cachedEntries = entries;
       cachedScoped = scoped;
@@ -431,6 +497,10 @@ export default function (pi: ExtensionAPI) {
   // ── Auto-fetch on interactive session start ──
   pi.on("session_start", async (_event, ctx) => {
     if (!ctx.hasUI) return; // headless/print/json — skip
+    activeScopedSlugs = ((ctx as any).scopedModels || []).map((sm: any) => ({
+      slug: sm.model.id,
+      label: sm.model.name || sm.model.id,
+    }));
     refresh(ctx);
   });
 
@@ -450,6 +520,10 @@ export default function (pi: ExtensionAPI) {
 
       // Refresh if stale
       if (!cachedEntries) {
+        activeScopedSlugs = ((ctx as any).scopedModels || []).map((sm: any) => ({
+          slug: sm.model.id,
+          label: sm.model.name || sm.model.id,
+        }));
         await refresh(ctx);
       }
       if (!cachedEntries) return; // refresh already notified
@@ -491,7 +565,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "or_metrics_query",
     label: "OR Metrics Query",
-    description: "Query OpenRouter ability-per-price metrics for the scoped models or for any tracked model. Use mode='scoped' for our models, mode='top N' for top N by blended IPP, mode='find <query>' to search by name, or mode='notable' for analytical highlights.",
+    description: "Query OpenRouter ability-per-price metrics for the scoped models or for any tracked model. Use mode='scoped' for our models, mode='top N' for top N by blended IPP, mode='find <query>' to search by name, or mode='notable' for analytical highlights. IPP fields: blndcod (BlndCd), blndagnt (BlndAg), cachcod (CachCd), cachagt (CachAg), blnd (BlndAv), cach (CachAv).",
     parameters: Type.Object({
       mode: Type.String({ description: "scoped | top N | find <query> | notable" }),
     }),
@@ -500,6 +574,14 @@ export default function (pi: ExtensionAPI) {
         return {
           content: [{ type: "text", text: "OR metrics not loaded yet. Run /or-metrics first." }],
         };
+      }
+      // Also refresh scoped slugs from tool context if available
+      const sm = (_ctx as any)?.scopedModels;
+      if (sm && sm.length > 0 && (!activeScopedSlugs || activeScopedSlugs.length === 0)) {
+        activeScopedSlugs = sm.map((x: any) => ({
+          slug: x.model.id,
+          label: x.model.name || x.model.id,
+        }));
       }
 
       const mode = (params.mode || "").toLowerCase().trim();
@@ -516,8 +598,8 @@ export default function (pi: ExtensionAPI) {
         }));
       } else if (mode.startsWith("top")) {
         const n = parseInt(mode.replace("top", "").trim()) || 10;
-        const ranked = [...cachedEntries].filter((e) => e.ipp.blended != null)
-          .sort((a, b) => (b.ipp.blended || 0) - (a.ipp.blended || 0))
+        const ranked = [...cachedEntries].filter((e) => e.ipp.blnd != null)
+          .sort((a, b) => (b.ipp.blnd || 0) - (a.ipp.blnd || 0))
           .slice(0, Math.min(n, 50));
         result.rankings = ranked.map((e) => ({
           name: e.name,
