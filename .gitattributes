@@ -1,0 +1,21 @@
+# Default behaviour: text files get LF line endings
+* text=auto eol=lf
+
+# Shell scripts must always be LF (even on Windows)
+*.sh text eol=lf
+
+# Dockerfiles must always be LF
+Dockerfile* text eol=lf
+
+# Devcontainer files (run inside Linux containers)
+.devcontainer/** text eol=lf
+
+# Binary files — no conversion
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff2 binary
+*.jar binary
+*.gz binary
