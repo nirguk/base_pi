@@ -1,0 +1,17 @@
+{
+  "name": "openrouter-provider-status",
+  "version": "0.2.0",
+  "description": "Shows the actual OpenRouter upstream provider that served each request in the footer",
+  "main": "index.ts",
+  "type": "module",
+  "pi": {
+    "type": "extension",
+    "extensions": ["index.ts"]
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.11"
+  }
+}
