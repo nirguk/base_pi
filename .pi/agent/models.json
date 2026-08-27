@@ -33,7 +33,8 @@
         "openRouterRouting": {
           "preferred_min_throughput": {
             "p99": 40
-          }
+          },
+          "ignore": ["digitalocean"]
         }
       }
     }
