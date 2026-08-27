@@ -1,8 +1,8 @@
 {
   "defaultProvider": "openrouter",
-  "defaultModel": "deepseek/deepseek-v4-flash",
+  "defaultModel": "deepseek/deepseek-v4-flash-0731",
   "enabledModels": [
-    "deepseek/deepseek-v4-flash",
+    "deepseek/deepseek-v4-flash-0731",
     "inclusionai/ling-3.0-flash",
     "z-ai/glm-5.3-flash",
     "upstage/solar-pro4",
@@ -12,8 +12,8 @@
   "subagents": {
     "defaultProvider": "openrouter",
     "agentOverrides": {
-      "oracle":     { "model": "deepseek/deepseek-v4-flash" },
-      "reviewer":   { "model": "deepseek/deepseek-v4-flash" },
+      "oracle":     { "model": "deepseek/deepseek-v4-flash-0731" },
+      "reviewer":   { "model": "deepseek/deepseek-v4-flash-0731" },
       "worker":     { "model": "inclusionai/ling-3.0-flash" },
       "researcher": { "model": "inclusionai/ling-3.0-flash" },
       "scout":      { "model": "inclusionai/ling-3.0-flash" },

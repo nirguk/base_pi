@@ -421,13 +421,13 @@ function renderScoped(scoped: any[]) {
   const ippDec = FMT.ippPrecision(costVals.map(_ => 0).concat(...ipCols.filter(c => c.length > 0)), 2);
   const ipDecs = ipCols.map(c => FMT.ippPrecision(c, 2));
 
-  lines.push("┌─ Our Scoped Models ──────────────────────────────────────────────────────────────────────────┐");
-  lines.push("│ Model              Intel  Coding Agentic  Base$/M    p90TPS  BlndCd  BlndAg  CachCd  CachAg│");
-  lines.push("│───────────────────┄──────┄───────┄───────┄──────────┄───────┄────────┄───────┄───────┄───────│");
+  lines.push("┌─ Our Scoped Models ───────────────────────────────────────────────────────────────────────────────────────────────────┐");
+  lines.push("│ Model                                        Intel  Coding Agentic  Base$/M    p90TPS  BlndCd  BlndAg  CachCd  CachAg│ ");
+  lines.push("│───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│");
   for (const s of scoped) {
-    const name = FMT.pad(s.label, 18);
+    const name = FMT.pad(s.label, 40);
     if (!s.entry) {
-      lines.push(`│ ${name}  no data from OpenRouter                                                      │`);
+      lines.push(`│ ${name}  no data from OpenRouter                                                     │`);
       continue;
     }
     const e = s.entry;
@@ -442,23 +442,23 @@ function renderScoped(scoped: any[]) {
     const ca = FMT.ipp(e.ipp.cachagt, ipDecs[3]).padStart(7);
     lines.push(`│ ${name} ${intel}  ${coding}  ${agentic}  ${blended}  ${tps}  ${bc}  ${ba}  ${cc}  ${ca} │`);
   }
-  lines.push("└──────────────────────────────────────────────────────────────────────────────────────────┘");
+  lines.push("└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘");
   return lines.join("\n");
 }
 
 function renderNotable(notable: any[]) {
   const lines: string[] = [];
-  lines.push("┌─ Notable ──────────────────────────────────────────────────────────────────────────────┐");
+  lines.push("┌─ Notable ───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐");
   for (const n of notable) {
-    lines.push(`│ ${FMT.pad(n.category, 78)} │`);
+    lines.push(`│ ${FMT.pad(n.category, 112)} │`);
     for (const m of n.models) {
-      const name = FMT.pad(m.name || "", 22).slice(0, 22);
+      const name = FMT.pad(m.name || "", 40).slice(0, 40);
       const v = typeof m.v === "number" ? (m.v > 100 ? m.v.toFixed(1) : m.v.toFixed(2).padStart(6)) : String(m.v ?? "—");
-      lines.push(`│   ${name}  ${v}${" ".repeat(Math.max(0, 46 - String(v).length))} │`);
+      lines.push(`│   ${name}  ${v}${" ".repeat(Math.max(0, 74 - String(v).length))} │`);
     }
-    lines.push(`│${"─".repeat(80)}│`);
+    lines.push(`│─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│`);
   }
-  lines.push("└──────────────────────────────────────────────────────────────────────────────────────┘");
+  lines.push("└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘");
   return lines.join("\n");
 }
 
@@ -485,11 +485,11 @@ function renderTop(entries: any[]) {
   const tpsDec = columnPrecision(tpsVals.filter((v): v is number => v != null), 1);
 
   const lines: string[] = [];
-  lines.push("┌─ Top 20 by Blended IPP ──────────────────────────────────────────────────────────────────┐");
-  lines.push("│Rank Model                     Intel Coding Agent  $M/M  p90TPS BlndCd BlndAg CachCd CachAg BlndAv CachAv│");
+  lines.push("┌─ Top 20 by Blended IPP ───────────────────────────────────────────────────────────────────────────────────────────────────────────┐");
+  lines.push("│Rank Model                                        Intel Coding Agent  $M/M  p90TPS BlndCd BlndAg CachCd CachAg BlndAv CachAv       │");
   ranked.slice(0, 20).forEach((e, i) => {
     const rank = (i + 1).toString().padStart(2);
-    const name = FMT.pad(e.name.length > 25 ? e.name.slice(0, 23) + "…" : e.name, 25);
+    const name = FMT.pad(e.name.length > 40 ? e.name.slice(0, 38) + "…" : e.name, 40);
     const intel = e.indices.intelligence != null ? e.indices.intelligence.toFixed(0).padStart(4) : "  — ";
     const coding = e.indices.coding != null ? e.indices.coding.toFixed(0).padStart(4) : "  — ";
     const agentic = e.indices.agentic != null ? e.indices.agentic.toFixed(0).padStart(4) : "  — ";
@@ -501,9 +501,9 @@ function renderTop(entries: any[]) {
     const ca = FMT.ipp(e.ipp.cachagt, caDec).padStart(6);
     const ba_ = FMT.ipp(e.ipp.blnd, bDec).padStart(7);
     const ca_ = FMT.ipp(e.ipp.cach, cDec).padStart(7);
-    lines.push(`│ ${rank} ${name} ${intel} ${coding} ${agentic} ${blended} ${tps} ${bc} ${ba} ${cc} ${ca} ${ba_} ${ca_} │`);
+    lines.push(`│ ${rank} ${name} ${intel} ${coding} ${agentic} ${blended} ${tps} ${bc} ${ba} ${cc} ${ca} ${ba_} ${ca_}  │`);
   });
-  lines.push("└──────────────────────────────────────────────────────────────────────────────────────────┘");
+  lines.push("└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘");
   return lines.join("\n");
 }
 
@@ -512,11 +512,11 @@ function renderChanges(data: any) {
     return "No prior snapshot yet. Run /or-metrics a second time later to see changes.";
   }
   const lines: string[] = [];
-  lines.push(`┌─ Changes since ${data.priorDate} ────────────────────────────────────────────────────────┐`);
+  lines.push(`┌─ Changes since ${data.priorDate} ───────────────────────────────────────────────────────────────────────────────────┐`);
 
   if (!data.added.length && !data.removed.length && !data.changes.length) {
     lines.push(`│ ✓ No changes. (${data.currentDate})`);
-    lines.push("└──────────────────────────────────────────────────────────────────────────────────────┘");
+    lines.push("└─────────────────────────────────────────────────────────────────────────────────────────────────────┘");
     return lines.join("\n");
   }
 
@@ -524,7 +524,7 @@ function renderChanges(data: any) {
     lines.push(`│ 🆕  New models (${data.added.length}):`);
     const names = data.added.slice(0, 12);
     for (let i = 0; i < names.length; i += 3) {
-      const row = names.slice(i, i + 3).map((n: string) => n.padEnd(25).slice(0, 25)).join("");
+      const row = names.slice(i, i + 3).map((n: string) => n.padEnd(40).slice(0, 40)).join("");
       lines.push(`│    ${row}`);
     }
     if (data.added.length > 12) lines.push(`│    … and ${data.added.length - 12} more`);
@@ -540,11 +540,11 @@ function renderChanges(data: any) {
       const val = c.metric === "price" 
         ? `${arrow}${Math.abs(c.delta).toFixed(1)}% (${FMT.cost(c.old)} → ${FMT.cost(c.new)})`
         : `${arrow}${Math.abs(c.delta).toFixed(1)}pt (${c.old} → ${c.new})`;
-      lines.push(`│    ${FMT.pad(c.name, 25)} ${val}`);
+      lines.push(`│    ${FMT.pad(c.name, 40)} ${val}`);
     }
     if (data.changes.length > 12) lines.push(`│    … and ${data.changes.length - 12} more`);
   }
-  lines.push("└──────────────────────────────────────────────────────────────────────────────────────┘");
+  lines.push("└─────────────────────────────────────────────────────────────────────────────────────────────────────┘");
   return lines.join("\n");
 }
 
@@ -561,20 +561,20 @@ function renderTPS(entries: any[]) {
   const bDec = FMT.ippPrecision(bVals, 2);
 
   const lines: string[] = [];
-  lines.push("┌─ Top Models by p90 Throughput (tokens/sec) ──────────────────────────────────────────┐");
-  lines.push("│Rank Model                     p90 TPS(30m) Base$/M   BlndAv  Coding  Agentic  Intel│");
+  lines.push("┌─ Top Models by p90 Throughput (tokens/sec) ──────────────────────────────────────────────────────┐");
+  lines.push("│Rank Model                                     p90 TPS(30m) Base$/M  BlndAv  Coding  Agentic Intel│");
   ranked.slice(0, 20).forEach((e, i) => {
     const rank = (i + 1).toString().padStart(2);
-    const name = FMT.pad(e.name.length > 25 ? e.name.slice(0, 23) + "…" : e.name, 25);
+    const name = FMT.pad(e.name.length > 40 ? e.name.slice(0, 38) + "…" : e.name, 40);
     const tps = e.throughput_p90 != null ? e.throughput_p90.toFixed(tpsDec).padStart(7) : "      —";
     const blended = FMT.cost(e.pricing.blended, costDec).padStart(6);
     const ba_ = FMT.ipp(e.ipp.blnd, bDec).padStart(7);
     const coding = e.indices.coding != null ? e.indices.coding.toFixed(0).padStart(5) : "    —";
     const agentic = e.indices.agentic != null ? e.indices.agentic.toFixed(0).padStart(5) : "    —";
     const intel = e.indices.intelligence != null ? e.indices.intelligence.toFixed(0).padStart(5) : "    —";
-    lines.push(`│ ${rank} ${name} ${tps}  ${blended}  ${ba_}  ${coding}  ${agentic}  ${intel} │`);
+    lines.push(`│ ${rank} ${name} ${tps}  ${blended}  ${ba_}  ${coding}  ${agentic}  ${intel}    │`);
   });
-  lines.push("└──────────────────────────────────────────────────────────────────────────────────────────┘");
+  lines.push("└──────────────────────────────────────────────────────────────────────────────────────────────────┘");
   return lines.join("\n");
 }
 
