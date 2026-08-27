@@ -450,7 +450,7 @@ export default function (pi: ExtensionAPI) {
       return null;
     }
 
-    ctx.ui.setStatus("or-metrics", "Fetching OR metrics…");
+    ctx.ui.setStatus("or-metrics", "Pi metrics: fetching…");
     try {
       const entries = await fetchORData(apiKey);
       const scoped = findScoped(entries, activeScopedSlugs);
@@ -458,7 +458,7 @@ export default function (pi: ExtensionAPI) {
       cachedEntries = entries;
       cachedScoped = scoped;
       cachedChanges = data;
-      ctx.ui.setStatus("or-metrics", `${entries.length} models tracked`);
+      ctx.ui.setStatus("or-metrics", `Pi is tracking ${entries.length} models`);
 
       // Notify on changes — rich color-coded summary
       if (data.priorDate) {
@@ -488,7 +488,7 @@ export default function (pi: ExtensionAPI) {
       }
       return data;
     } catch (e: any) {
-      ctx.ui.setStatus("or-metrics", "fetch failed");
+      ctx.ui.setStatus("or-metrics", "Pi metrics: fetch failed");
       ctx.ui.notify(`OR metrics fetch failed: ${e.message}`, "error");
       return null;
     }
