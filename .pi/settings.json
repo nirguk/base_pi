@@ -30,6 +30,7 @@
   "extensions": [
     "./extensions/openrouter-free-analysis.ts",
     "./extensions/findtree.ts",
-    "./extensions/openrouter-provider-status"
+    "./extensions/openrouter-provider-status",
+    "./extensions/poolside-laguna-compact.ts"
   ]
 }
