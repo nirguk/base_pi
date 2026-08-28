@@ -137,6 +137,22 @@ interface DiffResult {
   changes: DiffChange[];
 }
 
+/** Context passed to the `or_metrics_query` tool execute handler. */
+interface ToolExecuteContext {
+  scopedModels?: { model: { id: string; name?: string } }[];
+}
+
+/** Result of a metrics refresh (fetch + analyze + snapshot). */
+interface MetricsRefreshResult {
+  priorDate: string | null;
+  currentDate: string;
+  added: string[];
+  removed: string[];
+  changes: DiffChange[];
+  entries: ModelEntry[];
+  entriesWithData: SnapshotModel[];
+}
+
 interface ScopedModelEntry {
   slug: string;
   label: string;
@@ -715,7 +731,7 @@ export function setupMetrics(pi: ExtensionAPI) {
   // ── State ──
   let cachedEntries: ModelEntry[] | null = null;
   let cachedScoped: ScopedModelEntry[] | null = null;
-  let cachedChanges: { priorDate: string | null; currentDate: string; added: string[]; removed: string[]; changes: DiffChange[]; entries: ModelEntry[]; entriesWithData: SnapshotModel[] } | null;
+  let cachedChanges: MetricsRefreshResult | null;
   let cachedTPSData: Record<string, number | null> = {};
   let tpsCacheDate: string | null = null;
   let tpsFetchInProgress: boolean = false;
@@ -785,7 +801,7 @@ export function setupMetrics(pi: ExtensionAPI) {
   }
 
   // Shared fetch-and-analyze (interactive only)
-  async function refresh(ctx: MetricsCommandCtx): Promise<{ priorDate: string | null; currentDate: string; added: string[]; removed: string[]; changes: DiffChange[]; entries: ModelEntry[]; entriesWithData: SnapshotModel[] } | null> {
+  async function refresh(ctx: MetricsCommandCtx): Promise<MetricsRefreshResult | null> {
     if (!ctx.hasUI) return null;
     const apiKey = process.env.OPENROUTER_API_KEY || "";
     if (!apiKey) {
@@ -967,7 +983,13 @@ export function setupMetrics(pi: ExtensionAPI) {
     parameters: Type.Object({
       mode: Type.String({ description: "scoped | top N | tps | find <query> | notable" }),
     }),
-    async execute(toolCallId: string, params: { mode: string }, _signal: AbortSignal, _onUpdate: unknown, _ctx: { scopedModels?: { model: { id: string; name?: string } }[] }): Promise<{ content: { type: string; text: string }[] }> {
+    async execute(
+      toolCallId: string,
+      params: { mode: string },
+      _signal: AbortSignal,
+      _onUpdate: unknown,
+      _ctx: ToolExecuteContext,
+    ): Promise<{ content: { type: string; text: string }[] }> {
       if (!cachedEntries) {
         return {
           content: [{ type: "text", text: "OR metrics not loaded yet. Run /or-metrics first." }],
