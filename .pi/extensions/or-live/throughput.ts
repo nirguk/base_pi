@@ -12,7 +12,15 @@ export type ThroughputStats = {
  * benchmark is therefore the arithmetic mean of the available provider p90s,
  * rather than whichever endpoint happens to be first in the response.
  */
-export function averageEndpointThroughput(endpoints: any[]): ThroughputStats | null {
+interface EndpointMeasurement {
+  throughput_last_30m?: {
+    p90?: number;
+    p50?: number;
+    mean?: number;
+  };
+}
+
+export function averageEndpointThroughput(endpoints: EndpointMeasurement[]): ThroughputStats | null {
   if (!Array.isArray(endpoints) || endpoints.length === 0) return null;
 
   const average = (field: keyof ThroughputStats): number | null => {

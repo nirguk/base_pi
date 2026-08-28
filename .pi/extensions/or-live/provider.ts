@@ -49,17 +49,28 @@ import {
 
 // ─── Constants ──────────────────────────────────────────────────────────
 
+/** Header name used to opt in to provider metadata in the response body. */
 const OR_METADATA_HEADER = "X-OpenRouter-Metadata";
+/** Header value that enables provider metadata inclusion in the response. */
 const OR_METADATA_VALUE = "enabled";
+/** Header name carrying the generation ID for post-response provider lookups. */
 const GENERATION_ID_HEADER = "X-Generation-Id";
+/** OpenRouter generation-record endpoint URL. */
 const GENERATION_ENDPOINT = "https://openrouter.ai/api/v1/generation";
+/** Overall timeout (ms) for a single generation-record fetch attempt. */
 const GENERATION_FETCH_TIMEOUT_MS = 30000;
-// Generation records can lag the completion response, especially for streamed
-// requests. In practice they may take several seconds to become queryable, so
-// poll for about 21 seconds after the stream has finished.
+/** Retry delays (ms) for transient generation-record failures (404, 429, 502, etc.). */
 const GENERATION_RETRY_DELAYS_MS = [1000, 2000, 3000, 4000, 5000, 6000] as const;
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+/** TTL (ms) for the in-memory generation-record cache. */
+const CACHE_TTL_MS = 5 * 60 * 1000;
+/** Rolling window (ms) for per-provider TPS observations before they are pruned. */
 const ROLLING_TPS_WINDOW_MS = 30 * 60 * 1000;
+/** Maximum number of response measurements retained in the in-memory map. */
+const MAX_RESPONSE_MEASUREMENTS = 100;
+/** Batch size for background TPS fetches. */
+const TPS_FETCH_BATCH_SIZE = 20;
+/** Minimum interval (ms) between TPS fetch progress notifications. */
+const TPS_FETCH_PROGRESS_INTERVAL = 1000;
 
 // ─── Loud logging mode ──────────────────────────────────────────────────
 
@@ -68,14 +79,24 @@ const ROLLING_TPS_WINDOW_MS = 30 * 60 * 1000;
 //   - env var OPENROUTER_PROVIDER_STATUS_LOUD=1 (always-on)
 //   - /or-provider loud on|off (runtime toggle)
 const LOUD_VAR = "OPENROUTER_PROVIDER_STATUS_LOUD";
-export let loud: boolean = process.env[LOUD_VAR] === "1";
+let loud = process.env[LOUD_VAR] === "1";
+
+/** Return whether loud (verbose) logging is currently enabled. */
+export function isLoud(): boolean {
+  return loud;
+}
+
+/** Enable or disable loud (verbose) logging at runtime. */
+export function setLoud(value: boolean): void {
+  loud = value;
+}
 
 /** Emit a verbose log line when loud mode is active.
  *  Appears in console output with a prefix. TUI-side notifications are
  *  added explicitly at each call site (since log() has no ctx access).
  */
 export function log(...args: unknown[]): void {
-  if (loud) {
+  if (isLoud()) {
     console.log("[openrouter-provider-status]", ...args);
   }
 }
@@ -84,8 +105,8 @@ export function log(...args: unknown[]): void {
  *  when loud mode is active. Use this in event handlers where ctx is
  *  available so the user sees decisions in the footer/status line.
  */
-export function logWithCtx(ctx: any, ...args: unknown[]): void {
-  if (loud) {
+export function logWithCtx(ctx: ProviderHandlerCtx, ...args: unknown[]): void {
+  if (isLoud()) {
     console.log("[openrouter-provider-status]", ...args);
     ctx.ui.notify(
       `[openrouter-provider-status] ${args.map(String).join(" ")}`,
@@ -137,6 +158,63 @@ export interface ProviderStatusRef {
   theme: { fg: (color: string, text: string) => string };
   slug: string;
   providerName: string;
+}
+
+/** Event payload for `before_provider_headers` and `after_provider_response` hooks.
+ *  `headers` is key-normalised to lowercase by the Fetch Headers implementation.
+ */
+interface ProviderHeadersEvent {
+  headers?: Record<string, string>;
+}
+
+/** Event payload for `message_start` and `message_end` hooks. */
+interface ProviderMessageEvent {
+  message?: {
+    role?: string;
+    usage?: { output?: number };
+  };
+}
+
+/** Context object passed to provider event handlers and command handlers.
+ *  Captures the subset of the Pi extension API surface used by this module.
+ */
+interface ProviderHandlerCtx {
+  model?: {
+    id?: string;
+    provider?: string;
+  };
+  modelRegistry?: {
+    getApiKeyForProvider(provider: string): Promise<string | undefined>;
+  };
+  ui: {
+    setStatus(key: string, text: string | undefined): void;
+    notify(message: string, level: string): void;
+    theme: { fg(color: string, text: string): string };
+  };
+  hasUI?: boolean;
+  scopedModels?: unknown[];
+}
+
+/** Parameters for the `/or-provider` command handler. */
+interface OrProviderCommandParams {
+  args: string;
+  ctx: ProviderHandlerCtx;
+}
+
+/** Update the provider status footer: show TPS-enhanced text when it adds information, otherwise the plain provider name. */
+function setProviderStatus(
+  providerName: string,
+  slug: string,
+  ref: ProviderStatusRef | undefined,
+  ctx: ProviderHandlerCtx,
+): void {
+  const baseText = ref
+    ? formatProviderStatusWithRef(providerName, slug, ref)
+    : formatProviderStatus(providerName);
+  const enhanced = ref
+    ? formatProviderTPSStatusWithRef(providerName, slug, ref)
+    : formatProviderTPSStatus(providerName, slug);
+  ctx.ui.setStatus("openrouter-provider", enhanced !== baseText ? enhanced : baseText);
 }
 
 // ─── In-memory cache ────────────────────────────────────────────────────
@@ -241,6 +319,7 @@ export function formatProviderTPSStatus(
 /** Format provider+TPS status using a ProviderStatusRef for theme-aware
  *  styling. Previous providers observed in the 30m rolling window are
  *  appended to the right, grayed out via ref.theme.fg("dim", ...).
+ *  Callers should prune stale providers before calling this function.
  */
 export function formatProviderTPSStatusWithRef(
   providerName: string,
@@ -248,7 +327,6 @@ export function formatProviderTPSStatusWithRef(
   ref: ProviderStatusRef,
 ): string {
   const base = formatProviderTPSStatus(providerName, slug);
-  pruneObservedProviders(slug);
   const providers = observedProviders.get(slug);
   if (!providers) return base;
 
@@ -266,18 +344,18 @@ export function formatProviderTPSStatusWithRef(
 export function formatProviderTPSStatusWithCtx(
   providerName: string,
   slug: string,
-  ctx: any,
+  _ctx: ProviderHandlerCtx,
 ): string {
   return formatProviderTPSStatus(providerName, slug);
 }
 
-function startResponseMeasurement(generationId: string, ctx: any): void {
+function startResponseMeasurement(generationId: string, ctx: ProviderHandlerCtx): void {
   const slug = ctx.model?.id;
   if (!slug) return;
   responseMeasurements.set(generationId, { generationId, slug, requestStartedAt: Date.now() });
   // Keep this bounded if a provider fails before emitting message_end.
   const cutoff = Date.now() - ROLLING_TPS_WINDOW_MS;
-  while (responseMeasurements.size > 100) {
+  while (responseMeasurements.size > MAX_RESPONSE_MEASUREMENTS) {
     const oldestKey = responseMeasurements.keys().next().value;
     if (oldestKey && responseMeasurements.get(oldestKey)!.requestStartedAt < cutoff) {
       responseMeasurements.delete(oldestKey);
@@ -290,7 +368,7 @@ function startResponseMeasurement(generationId: string, ctx: any): void {
   pruneTPSObservations();
 }
 
-function findMeasurementForMessage(ctx: any): ResponseMeasurement | undefined {
+function findMeasurementForMessage(ctx: ProviderHandlerCtx): ResponseMeasurement | undefined {
   const slug = ctx.model?.id;
   for (const measurement of responseMeasurements.values()) {
     if (!measurement.completedAt && (!slug || measurement.slug === slug)) return measurement;
@@ -358,6 +436,7 @@ export function formatProviderStatus(providerName: string): string {
 /** Format the provider status using a ProviderStatusRef for theme-aware
  *  styling. Previous providers observed in the 30m rolling window are
  *  appended to the right, grayed out via ref.theme.fg("dim", ...).
+ *  Callers should prune stale providers before calling this function.
  */
 export function formatProviderStatusWithRef(
   providerName: string,
@@ -365,7 +444,6 @@ export function formatProviderStatusWithRef(
   ref: ProviderStatusRef,
 ): string {
   const base = formatProviderStatus(providerName);
-  pruneObservedProviders(slug);
   const providers = observedProviders.get(slug);
   if (!providers) return base;
 
@@ -383,7 +461,7 @@ export function formatProviderStatusWithRef(
 export function formatProviderStatusWithCtx(
   providerName: string,
   slug: string,
-  ctx: any,
+  _ctx: ProviderHandlerCtx,
 ): string {
   return formatProviderStatus(providerName);
 }
@@ -508,14 +586,14 @@ export async function fetchGenerationRecord(
 }
 
 /** Guard: true only when the request is going to OpenRouter. */
-export function isOpenRouterRequest(ctx: any): boolean {
+export function isOpenRouterRequest(ctx: ProviderHandlerCtx): boolean {
   const model = ctx.model;
   if (!model) return false;
   return model.provider === "openrouter";
 }
 
 /** Resolve OpenRouter API key: modelRegistry first, then env fallback. */
-export async function resolveApiKey(ctx: any): Promise<string | undefined> {
+export async function resolveApiKey(ctx: ProviderHandlerCtx): Promise<string | undefined> {
   if (ctx.modelRegistry) {
     try {
       const apiKey = await ctx.modelRegistry.getApiKeyForProvider("openrouter");
@@ -538,7 +616,7 @@ export async function resolveApiKey(ctx: any): Promise<string | undefined> {
  */
 async function lookupAndDisplayProvider(
   generationId: string,
-  ctx: any,
+  ctx: ProviderHandlerCtx,
   sequence: number,
   onProviderResolved?: (providerName: string, slug: string) => void,
   ref?: ProviderStatusRef,
@@ -620,19 +698,8 @@ async function lookupAndDisplayProvider(
         );
         logWithCtx(ctx, "  -> setting status to", providerName);
         const slug = measurement?.slug || ctx.model?.id || "";
-        const statusText = ref
-          ? formatProviderStatusWithRef(providerName, slug, ref)
-          : formatProviderStatus(providerName);
-        ctx.ui.setStatus("openrouter-provider", statusText);
-        const enhanced = ref
-          ? formatProviderTPSStatusWithRef(providerName, slug, ref)
-          : formatProviderTPSStatus(providerName, slug);
-        const baseText = ref
-          ? formatProviderStatusWithRef(providerName, slug, ref)
-          : formatProviderStatus(providerName);
-        if (enhanced !== baseText) {
-          ctx.ui.setStatus("openrouter-provider", enhanced);
-        }
+        pruneObservedProviders(slug);
+        setProviderStatus(providerName, slug, ref, ctx);
       }
     } finally {
       clearTimeout(timer);
@@ -654,7 +721,7 @@ async function lookupAndDisplayProvider(
 }
 
 async function flushPendingGenerationLookups(
-  ctx: any,
+  ctx: ProviderHandlerCtx,
   onProviderResolved?: (providerName: string, slug: string) => void,
   ref?: ProviderStatusRef,
 ): Promise<void> {
@@ -683,6 +750,7 @@ export function setupProvider(pi: ExtensionAPI) {
   // refresh the same footer immediately instead of waiting for another turn.
   const unsubscribeBenchmarkUpdates = subscribeModelBenchmarkTPS((slug) => {
     if (currentProviderStatus?.slug !== slug) return;
+    pruneObservedProviders(slug);
     currentProviderStatus.setStatus(
       "openrouter-provider",
       formatProviderTPSStatusWithRef(
@@ -693,7 +761,7 @@ export function setupProvider(pi: ExtensionAPI) {
     );
   });
 
-  function rememberProviderStatus(ctx: any, providerName: string, slug: string): void {
+  function rememberProviderStatus(ctx: ProviderHandlerCtx, providerName: string, slug: string): void {
     if (!slug) return;
     currentProviderStatus = {
       setStatus: ctx.ui.setStatus,
@@ -704,7 +772,7 @@ export function setupProvider(pi: ExtensionAPI) {
   }
 
   // ── before_provider_headers ──────────────────────────────────────────
-  pi.on("before_provider_headers", (event, ctx) => {
+  pi.on("before_provider_headers", (event: ProviderHeadersEvent, ctx: ProviderHandlerCtx) => {
     const model = ctx.model;
     const isOr = model && model.provider === "openrouter";
     logWithCtx(ctx, "before_provider_headers:", {
@@ -725,7 +793,7 @@ export function setupProvider(pi: ExtensionAPI) {
   });
 
   // ── after_provider_response ──────────────────────────────────────────
-  pi.on("after_provider_response", (event, ctx) => {
+  pi.on("after_provider_response", (event: ProviderHeadersEvent, ctx: ProviderHandlerCtx) => {
     // This hook runs before the provider stream is consumed. Capture the ID
     // here, but defer the lookup until turn_end.
     void (async () => {
@@ -777,19 +845,7 @@ export function setupProvider(pi: ExtensionAPI) {
       const slug = measurement?.slug || ctx.model?.id || "";
       rememberProviderStatus(ctx, cached, slug);
       const ref = currentProviderStatus;
-      const statusText = ref
-        ? formatProviderStatusWithRef(cached, slug, ref)
-        : formatProviderStatus(cached);
-      ctx.ui.setStatus("openrouter-provider", statusText);
-      const enhanced = ref
-        ? formatProviderTPSStatusWithRef(cached, slug, ref)
-        : formatProviderTPSStatus(cached, slug);
-      const baseText = ref
-        ? formatProviderStatusWithRef(cached, slug, ref)
-        : formatProviderStatus(cached);
-      if (enhanced !== baseText) {
-        ctx.ui.setStatus("openrouter-provider", enhanced);
-      }
+      setProviderStatus(cached, slug, ref, ctx);
       return;
     }
 
@@ -811,7 +867,7 @@ export function setupProvider(pi: ExtensionAPI) {
   // Measure from the first assistant message event rather than from the HTTP
   // request. This excludes connection/queue latency and approximates the
   // throughput represented by OpenRouter's endpoint metric.
-  pi.on("message_start", (event, ctx) => {
+  pi.on("message_start", (event: ProviderMessageEvent, ctx: ProviderHandlerCtx) => {
     if (event.message?.role !== "assistant" || !isOpenRouterRequest(ctx)) return;
     const measurement = findMeasurementForMessage(ctx);
     if (measurement && measurement.streamStartedAt == null) {
@@ -819,7 +875,7 @@ export function setupProvider(pi: ExtensionAPI) {
     }
   });
 
-  pi.on("message_end", (event, ctx) => {
+  pi.on("message_end", (event: ProviderMessageEvent, ctx: ProviderHandlerCtx) => {
     if (event.message?.role !== "assistant" || !isOpenRouterRequest(ctx)) return;
     const measurement = findMeasurementForMessage(ctx);
     if (!measurement) return;
@@ -831,6 +887,9 @@ export function setupProvider(pi: ExtensionAPI) {
     if (measurement.providerName) {
       rememberProviderStatus(ctx, measurement.providerName, measurement.slug);
       const ref = currentProviderStatus;
+      if (ref) {
+        pruneObservedProviders(measurement.slug);
+      }
       ctx.ui.setStatus(
         "openrouter-provider",
         ref
@@ -843,7 +902,7 @@ export function setupProvider(pi: ExtensionAPI) {
   // Pi emits turn_end after the provider stream and any tool results for the
   // turn have been consumed. This is the first reliable point to query the
   // generation endpoint.
-  pi.on("turn_end", (_event, ctx) => {
+  pi.on("turn_end", (_event: unknown, ctx: ProviderHandlerCtx) => {
     void flushPendingGenerationLookups(
       ctx,
       (providerName, slug) => rememberProviderStatus(ctx, providerName, slug),
@@ -882,20 +941,20 @@ export function setupProvider(pi: ExtensionAPI) {
       }
       return null;
     },
-    handler: async (args, ctx) => {
+    handler: async (args: string, ctx: ProviderHandlerCtx) => {
       const trimmed = args.trim();
 
       // Handle loud mode toggle subcommand.
       if (trimmed.startsWith("loud")) {
         const sub = trimmed.slice(4).trim().toLowerCase();
         if (sub === "on") {
-          loud = true;
+          setLoud(true);
           ctx.ui.notify("openrouter-provider-status: loud logging ON", "info");
           log("loud mode enabled via /or-provider loud on");
           return;
         }
         if (sub === "off") {
-          loud = false;
+          setLoud(false);
           ctx.ui.notify("openrouter-provider-status: loud logging OFF", "info");
           return;
         }
@@ -978,19 +1037,8 @@ export function setupProvider(pi: ExtensionAPI) {
           const slug = ctx.model?.id || "";
           rememberProviderStatus(ctx, providerName, slug);
           const ref = currentProviderStatus;
-          const statusText = ref
-            ? formatProviderStatusWithRef(providerName, slug, ref)
-            : formatProviderStatus(providerName);
-          ctx.ui.setStatus("openrouter-provider", statusText);
-          const enhanced = ref
-            ? formatProviderTPSStatusWithRef(providerName, slug, ref)
-            : formatProviderTPSStatus(providerName, slug);
-          const baseText = ref
-            ? formatProviderStatusWithRef(providerName, slug, ref)
-            : formatProviderStatus(providerName);
-          if (enhanced !== baseText) {
-            ctx.ui.setStatus("openrouter-provider", enhanced);
-          }
+          pruneObservedProviders(slug);
+          setProviderStatus(providerName, slug, ref, ctx);
           ctx.ui.notify(`Provider: ${providerName}`, "info");
         } finally {
           clearTimeout(timer);

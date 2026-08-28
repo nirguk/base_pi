@@ -26,7 +26,6 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import * as https from "node:https";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -36,6 +35,121 @@ import {
   setModelBenchmarkTPSMap,
   type ThroughputStats,
 } from "./throughput";
+
+// ─── Types ────────────────────────────────────────────────────────────────
+
+interface ModelBenchmark {
+  coding_index: number | null;
+  agentic_index: number | null;
+  intelligence_index: number | null;
+}
+
+interface ModelPricing {
+  prompt: string;
+  completion: string;
+  input_cache_read?: string | null;
+}
+
+interface OpenRouterModel {
+  id: string;
+  name?: string;
+  pricing: ModelPricing;
+  benchmarks?: {
+    artificial_analysis?: ModelBenchmark;
+  };
+}
+
+export interface ParsedPricing {
+  input: number;
+  output: number;
+  cacheRead: number | null;
+}
+
+export interface IPPMetrics {
+  blndcod: number | null;
+  blndagnt: number | null;
+  cachcod: number | null;
+  cachagt: number | null;
+  blnd: number | null;
+  cach: number | null;
+}
+
+export interface ModelEntry {
+  slug: string;
+  name: string;
+  pricing: {
+    input: number;
+    output: number;
+    cacheRead: number | null;
+    blended: number;
+    blendedCached: number;
+  };
+  indices: {
+    intelligence: number | null;
+    coding: number | null;
+    agentic: number | null;
+  };
+  ipp: IPPMetrics;
+  throughput_p90: number | null;
+  throughput_p50: number | null;
+  throughput_mean: number | null;
+}
+
+interface SnapshotModel {
+  slug: string;
+  name: string;
+  coding_index: number | null;
+  agentic_index: number | null;
+  intelligence_index: number | null;
+  blended_cost_per_m: number;
+  blended_cached_per_m: number;
+  blndcod: number | null;
+  blndagnt: number | null;
+  cachcod: number | null;
+  cachagt: number | null;
+  blnd: number | null;
+  cach: number | null;
+  throughput_p90: number | null;
+  throughput_p50: number | null;
+  throughput_mean: number | null;
+}
+
+interface SnapshotPayload {
+  snapshot_date: string;
+  fetched_at: string;
+  n_models: number;
+  models: SnapshotModel[];
+}
+
+interface DiffChange {
+  name: string;
+  metric: string;
+  old: number;
+  new: number;
+  delta: number;
+}
+
+interface DiffResult {
+  priorDate: string | null;
+  currentDate: string;
+  added: string[];
+  removed: string[];
+  changes: DiffChange[];
+}
+
+interface ScopedModelEntry {
+  slug: string;
+  label: string;
+  entry: ModelEntry | null;
+  found: boolean;
+}
+
+interface MetricsCommandCtx {
+  hasUI: boolean;
+  ui: { notify: (msg: string, level: string) => void; setStatus: (key: string, msg: string | undefined) => void };
+  model?: { id: string };
+  scopedModels?: { model: { id: string; name?: string } }[];
+}
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 
@@ -60,24 +174,17 @@ let activeScopedSlugs: { slug: string; label: string }[] = [];
 
 // ─── HTTP Fetch ────────────────────────────────────────────────────────────────
 
-function fetchJSON(url, headers = {}): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const opts: https.RequestOptions = { headers: headers as Record<string, string> };
-    https.get(url, opts, (res) => {
-      let data = "";
-      res.on("data", (c) => (data += c));
-      res.on("end", () => {
-        try { resolve(JSON.parse(data)); }
-        catch (e) { reject(new Error(`JSON parse: ${e.message}`)); }
-      });
-      res.on("error", reject);
-    }).on("error", reject);
-  });
+async function fetchJSON(url: string, headers: Record<string, string> = {}): Promise<any> {
+  const res = await fetch(url, { headers });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status} for ${url}`);
+  }
+  return res.json();
 }
 
 // ─── Pricing / Analysis ────────────────────────────────────────────────────────
 
-export function parsePricing(p: any) {
+export function parsePricing(p: ModelPricing | null | undefined): ParsedPricing | null {
   if (!p) return null;
   const input = parseFloat(p.prompt) * 1_000_000;
   const output = parseFloat(p.completion) * 1_000_000;
@@ -90,8 +197,8 @@ export function parsePricing(p: any) {
   };
 }
 
-export function analyzeModels(models: any[], tpsData?: Record<string, ThroughputStats | null>) {
-  const entries: any[] = [];
+export function analyzeModels(models: OpenRouterModel[], tpsData?: Record<string, ThroughputStats | null>): ModelEntry[] {
+  const entries: ModelEntry[] = [];
 
   for (const m of models) {
     const aa = m.benchmarks?.artificial_analysis;
@@ -133,16 +240,16 @@ export function analyzeModels(models: any[], tpsData?: Record<string, Throughput
   return entries;
 }
 
-export function findScoped(entries: any[], slugs: { slug: string; label: string }[]) {
+export function findScoped(entries: ModelEntry[], slugs: { slug: string; label: string }[]): ScopedModelEntry[] {
   return slugs.map((s) => {
-    const e = entries.find((x: any) => x.slug === s.slug);
+    const e = entries.find((x) => x.slug === s.slug);
     return { ...s, entry: e || null, found: !!e };
   });
 }
 
 // ─── Fetch from API ────────────────────────────────────────────────────────────
 
-async function fetchORData(apiKey: string) {
+async function fetchORData(apiKey: string): Promise<ModelEntry[]> {
   const url = `${OR_API_BASE}/models?limit=400`;
   const headers: Record<string, string> = {};
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
@@ -152,7 +259,7 @@ async function fetchORData(apiKey: string) {
 
   // No TPS data fetched here — call fetchTPSForSlugs separately for
   // scoped models or top-ranked models to avoid excessive API calls.
-  return analyzeModels(result.data);
+  return analyzeModels(result.data as OpenRouterModel[]);
 }
 
 /**
@@ -219,30 +326,40 @@ function saveDailyCache(date: string, data: Record<string, number | null>) {
 
 function ensureDir() { fs.mkdirSync(SNAPSHOT_DIR, { recursive: true }); }
 
-export function snapshotAndDiff(entries: any[]) {
-  ensureDir();
+function rotateSnapshots(): void {
   const latestPath = path.join(SNAPSHOT_DIR, "latest.json");
   const prevPath = path.join(SNAPSHOT_DIR, "previous.json");
-
-  // Load prior snapshot
-  let prior: any = null;
-  try { prior = JSON.parse(fs.readFileSync(prevPath, "utf8")); } catch { /* no prior */ }
-
-  // Rotate: current latest becomes previous
   try {
     if (fs.existsSync(latestPath)) {
-      // Remove old previous if exists, then rename latest -> previous
       if (fs.existsSync(prevPath)) fs.unlinkSync(prevPath);
       fs.renameSync(latestPath, prevPath);
     }
   } catch { /* best-effort */ }
+}
 
-  // Save new snapshot
-  const payload = {
+function saveSnapshot(payload: SnapshotPayload): void {
+  ensureDir();
+  const latestPath = path.join(SNAPSHOT_DIR, "latest.json");
+  fs.writeFileSync(latestPath, JSON.stringify(payload, null, 2));
+}
+
+function loadPriorSnapshot(): SnapshotPayload | null {
+  const prevPath = path.join(SNAPSHOT_DIR, "previous.json");
+  try {
+    const raw = JSON.parse(fs.readFileSync(prevPath, "utf8"));
+    if (!raw?.snapshot_date || !raw?.models) return null;
+    return raw as SnapshotPayload;
+  } catch {
+    return null;
+  }
+}
+
+function buildSnapshotPayload(entries: ModelEntry[]): SnapshotPayload {
+  return {
     snapshot_date: new Date().toISOString().slice(0, 10),
     fetched_at: new Date().toISOString(),
     n_models: entries.length,
-    models: entries.map((e: any) => ({
+    models: entries.map((e) => ({
       slug: e.slug,
       name: e.name,
       coding_index: e.indices.coding,
@@ -261,63 +378,81 @@ export function snapshotAndDiff(entries: any[]) {
       throughput_mean: e.throughput_mean ?? null,
     })),
   };
-  fs.writeFileSync(latestPath, JSON.stringify(payload, null, 2));
+}
 
-  // Compute diff
-  const changes: any[] = [];
+function computeDiff(prior: SnapshotPayload, current: SnapshotPayload): DiffResult {
+  const changes: DiffChange[] = [];
   let added: string[] = [];
   let removed: string[] = [];
 
-  if (prior) {
-    const priorIdx: Record<string, any> = {};
-    (prior.models || []).forEach((m: any) => (priorIdx[m.slug] = m));
-    const currIdx: Record<string, any> = {};
-    (payload.models || []).forEach((m: any) => (currIdx[m.slug] = m));
+  const priorIdx: Record<string, SnapshotModel> = {};
+  (prior.models || []).forEach((m) => (priorIdx[m.slug] = m));
+  const currIdx: Record<string, SnapshotModel> = {};
+  (current.models || []).forEach((m) => (currIdx[m.slug] = m));
 
-    added = payload.models
-      .filter((m: any) => !priorIdx[m.slug])
-      .map((m: any) => m.name);
-    removed = (prior.models || [])
-      .filter((m: any) => !currIdx[m.slug])
-      .map((m: any) => m.name);
+  added = current.models
+    .filter((m) => !priorIdx[m.slug])
+    .map((m) => m.name);
+  removed = (prior.models || [])
+    .filter((m) => !currIdx[m.slug])
+    .map((m) => m.name);
 
-    for (const slug of Object.keys(currIdx)) {
-      if (!priorIdx[slug]) continue;
-      const p = priorIdx[slug], c = currIdx[slug];
-      if (p.coding_index != null && c.coding_index != null) {
-        const d = c.coding_index - p.coding_index;
-        if (Math.abs(d) >= 0.5) changes.push({ name: c.name, metric: "coding", old: p.coding_index, new: c.coding_index, delta: d });
-      }
-      if (p.agentic_index != null && c.agentic_index != null) {
-        const d = c.agentic_index - p.agentic_index;
-        if (Math.abs(d) >= 0.5) changes.push({ name: c.name, metric: "agentic", old: p.agentic_index, new: c.agentic_index, delta: d });
-      }
-      if (p.blended_cost_per_m != null && c.blended_cost_per_m != null) {
-        const d = ((c.blended_cost_per_m - p.blended_cost_per_m) / p.blended_cost_per_m) * 100;
-        if (Math.abs(d) >= 5) changes.push({ name: c.name, metric: "price", old: p.blended_cost_per_m, new: c.blended_cost_per_m, delta: d });
-      }
-      if (p.throughput_p90 != null && c.throughput_p90 != null) {
-        const d = c.throughput_p90 - p.throughput_p90;
-        if (Math.abs(d) >= 5) changes.push({ name: c.name, metric: "throughput_p90", old: p.throughput_p90, new: c.throughput_p90, delta: d });
-      }
-      if (p.throughput_p50 != null && c.throughput_p50 != null) {
-        const d = c.throughput_p50 - p.throughput_p50;
-        if (Math.abs(d) >= 5) changes.push({ name: c.name, metric: "throughput_p50", old: p.throughput_p50, new: c.throughput_p50, delta: d });
-      }
-      if (p.throughput_mean != null && c.throughput_mean != null) {
-        const d = c.throughput_mean - p.throughput_mean;
-        if (Math.abs(d) >= 5) changes.push({ name: c.name, metric: "throughput_mean", old: p.throughput_mean, new: c.throughput_mean, delta: d });
-      }
+  for (const slug of Object.keys(currIdx)) {
+    if (!priorIdx[slug]) continue;
+    const p = priorIdx[slug];
+    const c = currIdx[slug];
+    if (p.coding_index != null && c.coding_index != null) {
+      const d = c.coding_index - p.coding_index;
+      if (Math.abs(d) >= 0.5) changes.push({ name: c.name, metric: "coding", old: p.coding_index, new: c.coding_index, delta: d });
+    }
+    if (p.agentic_index != null && c.agentic_index != null) {
+      const d = c.agentic_index - p.agentic_index;
+      if (Math.abs(d) >= 0.5) changes.push({ name: c.name, metric: "agentic", old: p.agentic_index, new: c.agentic_index, delta: d });
+    }
+    if (p.blended_cost_per_m != null && c.blended_cost_per_m != null) {
+      const d = ((c.blended_cost_per_m - p.blended_cost_per_m) / p.blended_cost_per_m) * 100;
+      if (Math.abs(d) >= 5) changes.push({ name: c.name, metric: "price", old: p.blended_cost_per_m, new: c.blended_cost_per_m, delta: d });
+    }
+    if (p.throughput_p90 != null && c.throughput_p90 != null) {
+      const d = c.throughput_p90 - p.throughput_p90;
+      if (Math.abs(d) >= 5) changes.push({ name: c.name, metric: "throughput_p90", old: p.throughput_p90, new: c.throughput_p90, delta: d });
+    }
+    if (p.throughput_p50 != null && c.throughput_p50 != null) {
+      const d = c.throughput_p50 - p.throughput_p50;
+      if (Math.abs(d) >= 5) changes.push({ name: c.name, metric: "throughput_p50", old: p.throughput_p50, new: c.throughput_p50, delta: d });
+    }
+    if (p.throughput_mean != null && c.throughput_mean != null) {
+      const d = c.throughput_mean - p.throughput_mean;
+      if (Math.abs(d) >= 5) changes.push({ name: c.name, metric: "throughput_mean", old: p.throughput_mean, new: c.throughput_mean, delta: d });
     }
   }
+
+  return { added, removed, changes };
+}
+
+export function snapshotAndDiff(entries: ModelEntry[]) {
+  ensureDir();
+
+  // Load prior snapshot
+  const prior = loadPriorSnapshot();
+
+  // Rotate: current latest becomes previous
+  rotateSnapshots();
+
+  // Save new snapshot
+  const payload = buildSnapshotPayload(entries);
+  saveSnapshot(payload);
+
+  // Compute diff
+  const diff = prior ? computeDiff(prior, payload) : { added: [] as string[], removed: [] as string[], changes: [] as DiffChange[] };
 
   return {
     priorDate: prior?.snapshot_date || null,
     currentDate: payload.snapshot_date,
     nEntries: entries.length,
-    added,
-    removed,
-    changes,
+    added: diff.added,
+    removed: diff.removed,
+    changes: diff.changes,
     entries,
     entriesWithData: payload.models,
   };
@@ -325,8 +460,8 @@ export function snapshotAndDiff(entries: any[]) {
 
 // ─── Notable Detection ──────────────────────────────────────────────────────────
 
-export function findNotable(entries: any[]) {
-  const notable: any[] = [];
+export function findNotable(entries: ModelEntry[]) {
+  const notable: { category: string; models: { name: string; v: number }[] }[] = [];
 
   const byAgentic = [...entries].filter((e) => e.indices.agentic != null)
     .sort((a, b) => (b.indices.agentic || 0) - (a.indices.agentic || 0));
@@ -394,7 +529,7 @@ const FMT = {
   },
 };
 
-export function renderScoped(scoped: any[]) {
+export function renderScoped(scoped: ScopedModelEntry[]) {
   const lines: string[] = [];
 
   // Collect column values for precision alignment
@@ -413,7 +548,8 @@ export function renderScoped(scoped: any[]) {
   }
   const costDec = columnPrecision(costVals, 4);
   const tpsDec = columnPrecision(tpsVals.filter((v): v is number => v != null), 1);
-  const ippDec = FMT.ippPrecision(costVals.map(_ => 0).concat(...ipCols.filter(c => c.length > 0)), 2);
+  const allIpCols = [...ipCols];
+  const ippDec = FMT.ippPrecision(allIpCols.flat(), 2);
   const ipDecs = ipCols.map(c => FMT.ippPrecision(c, 2));
 
   lines.push("┌─ Our Scoped Models ───────────────────────────────────────────────────────────────────────────────────────────────────┐");
@@ -441,7 +577,7 @@ export function renderScoped(scoped: any[]) {
   return lines.join("\n");
 }
 
-export function renderNotable(notable: any[]) {
+export function renderNotable(notable: { category: string; models: { name: string; v: number }[] }[]) {
   const lines: string[] = [];
   lines.push("┌─ Notable ───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐");
   for (const n of notable) {
@@ -457,7 +593,7 @@ export function renderNotable(notable: any[]) {
   return lines.join("\n");
 }
 
-export function renderTop(entries: any[]) {
+export function renderTop(entries: ModelEntry[]) {
   const ranked = [...entries].filter((e) => e.ipp.blnd != null)
     .sort((a, b) => (b.ipp.blnd || 0) - (a.ipp.blnd || 0));
 
@@ -502,7 +638,7 @@ export function renderTop(entries: any[]) {
   return lines.join("\n");
 }
 
-export function renderChanges(data: any) {
+export function renderChanges(data: { priorDate: string | null; currentDate: string; added: string[]; removed: string[]; changes: DiffChange[]; } | null) {
   if (!data.priorDate) {
     return "No prior snapshot yet. Run /or-metrics a second time later to see changes.";
   }
@@ -543,7 +679,7 @@ export function renderChanges(data: any) {
   return lines.join("\n");
 }
 
-export function renderTPS(entries: any[]) {
+export function renderTPS(entries: ModelEntry[]) {
   const ranked = [...entries]
     .filter((e) => e.throughput_p90 != null)
     .sort((a, b) => (b.throughput_p90 || 0) - (a.throughput_p90 || 0));
@@ -577,9 +713,9 @@ export function renderTPS(entries: any[]) {
 
 export function setupMetrics(pi: ExtensionAPI) {
   // ── State ──
-  let cachedEntries: any[] | null = null;
-  let cachedScoped: any[] | null = null;
-  let cachedChanges: any | null = null;
+  let cachedEntries: ModelEntry[] | null = null;
+  let cachedScoped: ScopedModelEntry[] | null = null;
+  let cachedChanges: { priorDate: string | null; currentDate: string; added: string[]; removed: string[]; changes: DiffChange[]; entries: ModelEntry[]; entriesWithData: SnapshotModel[] } | null;
   let cachedTPSData: Record<string, number | null> = {};
   let tpsCacheDate: string | null = null;
   let tpsFetchInProgress: boolean = false;
@@ -589,7 +725,7 @@ export function setupMetrics(pi: ExtensionAPI) {
    * Fetch p90 throughput for all tracked models in parallel batches.
    * Uses the daily cache to avoid re-fetching already-known models.
    */
-  async function fetchAllTPSAsync(apiKey: string, ctx: any): Promise<void> {
+  async function fetchAllTPSAsync(apiKey: string, ctx: MetricsCommandCtx): Promise<void> {
     const today = new Date().toISOString().slice(0, 10);
     tpsFetchInProgress = true;
 
@@ -604,7 +740,7 @@ export function setupMetrics(pi: ExtensionAPI) {
         ctx.ui.notify(`OR-metrics TPS: loaded ${cachedCount} cached entries from today's cache`, "info");
       }
 
-      const allSlugs = cachedEntries?.map((e: any) => e.slug) ?? [];
+      const allSlugs = cachedEntries?.map((e: ModelEntry) => e.slug) ?? [];
       const remaining = allSlugs.filter((slug: string) => cachedTPSData[slug] == null);
 
       if (remaining.length === 0) {
@@ -639,9 +775,9 @@ export function setupMetrics(pi: ExtensionAPI) {
 
       saveDailyCache(today, cachedTPSData);
       ctx.ui.notify("<<< OR-metrics TPS gathering complete — rerun for full stats >>>", "info");
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Background failures must not become unhandled promise rejections.
-      ctx.ui.notify(`OR-metrics TPS gathering failed: ${error?.message || error}`, "warning");
+      ctx.ui.notify(`OR-metrics TPS gathering failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
     } finally {
       tpsFetchInProgress = false;
       tpsFetchPromise = null;
@@ -649,7 +785,7 @@ export function setupMetrics(pi: ExtensionAPI) {
   }
 
   // Shared fetch-and-analyze (interactive only)
-  async function refresh(ctx: any) {
+  async function refresh(ctx: MetricsCommandCtx): Promise<{ priorDate: string | null; currentDate: string; added: string[]; removed: string[]; changes: DiffChange[]; entries: ModelEntry[]; entriesWithData: SnapshotModel[] } | null> {
     if (!ctx.hasUI) return null;
     const apiKey = process.env.OPENROUTER_API_KEY || "";
     if (!apiKey) {
@@ -719,17 +855,17 @@ export function setupMetrics(pi: ExtensionAPI) {
         }
       }
       return data;
-    } catch (e: any) {
+    } catch (e: unknown) {
       ctx.ui.setStatus("or-metrics", "Pi metrics: fetch failed");
-      ctx.ui.notify(`OR metrics fetch failed: ${e.message}`, "error");
+      ctx.ui.notify(`OR metrics fetch failed: ${e instanceof Error ? e.message : String(e)}`, "error");
       return null;
     }
   }
 
   // ── Auto-fetch on interactive session start ──
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (_event, ctx: MetricsCommandCtx): Promise<void> => {
     if (!ctx.hasUI) return; // headless/print/json — skip
-    activeScopedSlugs = ((ctx as any).scopedModels || []).map((sm: any) => ({
+    activeScopedSlugs = ((ctx as { scopedModels?: { model: { id: string; name?: string } }[] }).scopedModels || []).map((sm) => ({
       slug: sm.model.id,
       label: sm.model.name || sm.model.id,
     }));
@@ -739,11 +875,11 @@ export function setupMetrics(pi: ExtensionAPI) {
   // ── Command: /or-metrics ──
   pi.registerCommand("or-metrics", {
     description: "Show OpenRouter ability-per-price and provider-averaged throughput metrics. Args: scoped | notable | top | tps | changes",
-    getArgumentCompletions: (prefix: string) => {
+    getArgumentCompletions: (prefix: string): { value: string; label: string }[] | null => {
       const opts = ["scoped", "notable", "top", "tps", "changes"];
       return opts.filter((o) => o.startsWith(prefix)).map((o) => ({ value: o, label: o }));
     },
-    handler: async (args, ctx) => {
+    handler: async (args: string, ctx: MetricsCommandCtx): Promise<void> => {
       const apiKey = process.env.OPENROUTER_API_KEY || "";
       if (!apiKey) {
         ctx.ui.notify("Set OPENROUTER_API_KEY to use OR metrics", "warning");
@@ -831,23 +967,23 @@ export function setupMetrics(pi: ExtensionAPI) {
     parameters: Type.Object({
       mode: Type.String({ description: "scoped | top N | tps | find <query> | notable" }),
     }),
-    async execute(toolCallId, params, _signal, _onUpdate, _ctx) {
+    async execute(toolCallId: string, params: { mode: string }, _signal: AbortSignal, _onUpdate: unknown, _ctx: { scopedModels?: { model: { id: string; name?: string } }[] }): Promise<{ content: { type: string; text: string }[] }> {
       if (!cachedEntries) {
         return {
           content: [{ type: "text", text: "OR metrics not loaded yet. Run /or-metrics first." }],
         };
       }
       // Also refresh scoped slugs from tool context if available
-      const sm = (_ctx as any)?.scopedModels;
+      const sm = (_ctx as { scopedModels?: { model: { id: string; name?: string } }[] })?.scopedModels;
       if (sm && sm.length > 0 && (!activeScopedSlugs || activeScopedSlugs.length === 0)) {
-        activeScopedSlugs = sm.map((x: any) => ({
+        activeScopedSlugs = sm.map((x: { model: { id: string; name?: string } }) => ({
           slug: x.model.id,
           label: x.model.name || x.model.id,
         }));
       }
 
       const mode = (params.mode || "").toLowerCase().trim();
-      const result: any = { n_tracked: cachedEntries.length, timestamp: new Date().toISOString() };
+      const result: { n_tracked: number; timestamp: string; scoped?: unknown; rankings?: unknown; matches?: unknown; tps_rankings?: unknown; notable?: unknown; error?: string; note?: string } = { n_tracked: cachedEntries.length, timestamp: new Date().toISOString() };
 
       if (mode === "scoped" || mode.startsWith("scoped")) {
         result.scoped = cachedScoped!.map((s) => ({

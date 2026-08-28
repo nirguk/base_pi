@@ -17,7 +17,8 @@ import {
   clearCache,
   clearPendingGenerationLookups,
   clearTPSObservations,
-  loud,
+  isLoud,
+  setLoud,
   log,
   logWithCtx,
   formatProviderStatus,
@@ -73,8 +74,8 @@ describe("loud logging", () => {
     vi.restoreAllMocks();
   });
 
-  it("exported loud flag is a boolean", () => {
-    expect(typeof loud).toBe("boolean");
+  it("isLoud() returns a boolean", () => {
+    expect(typeof isLoud()).toBe("boolean");
   });
 
   it("log() does not throw when loud is false", () => {
@@ -197,7 +198,10 @@ describe("after_provider_response integration", () => {
     await new Promise((resolve) => setTimeout(resolve, 1100));
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(setStatus).toHaveBeenCalledWith("openrouter-provider", "Provider:DigitalOcean ;");
+    expect(setStatus).toHaveBeenCalledWith(
+      "openrouter-provider",
+      "Provider:DigitalOcean · TPS30m:— / OR30m:— ;",
+    );
   });
 
   it("fetches a lower-case generation header and displays the current provider shape", async () => {
@@ -231,7 +235,10 @@ describe("after_provider_response integration", () => {
     expect(request).toBeInstanceOf(URL);
     expect(request.searchParams.get("id")).toBe("gen/test id");
     expect(options.headers).toEqual({ Authorization: "Bearer test-key" });
-    expect(setStatus).toHaveBeenCalledWith("openrouter-provider", "Provider:DigitalOcean ;");
+    expect(setStatus).toHaveBeenCalledWith(
+      "openrouter-provider",
+      "Provider:DigitalOcean · TPS30m:— / OR30m:— ;",
+    );
   });
 });
 
@@ -367,6 +374,7 @@ describe("formatProviderStatusWithRef history", () => {
   it("excludes providers older than the rolling window", () => {
     const ref = makeRef({ slug: "acme/model", providerName: "DigitalOcean" });
     recordObservedProvider("acme/model", "StaleProvider", Date.now() - 31 * 60 * 1000);
+    pruneObservedProviders("acme/model");
     const result = formatProviderStatusWithRef("DigitalOcean", "acme/model", ref);
     expect(result).not.toContain("StaleProvider");
   });
