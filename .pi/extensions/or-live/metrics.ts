@@ -7,7 +7,8 @@
  * command plus a or_metrics tool for the LLM.
  *
  * Also fetches endpoint-level throughput data (p90 tokens/sec) from the
- * OpenRouter endpoints API. Throughput is averaged over a 30-minute window
+ * OpenRouter endpoints API. The model-level value is averaged across all
+ * available upstream providers, each measured over a 30-minute window
  * (OpenRouter's `throughput_last_30m` field).
  *
  * Snapshots: keeps exactly 2 files in ~/.pi/or-metrics/snapshots/
@@ -19,7 +20,7 @@
  *   /or-metrics scoped    — just our 4 scoped models
  *   /or-metrics notable   — analytically interesting models
  *   /or-metrics top       — top 20 by blended IPP
- *   /or-metrics tps       — top models by p90 throughput (tokens/sec, 30m window)
+ *   /or-metrics tps       — top models by provider-averaged p90 throughput (tokens/sec, 30m window)
  *   /or-metrics changes   — diff since last snapshot
  */
 
@@ -29,6 +30,12 @@ import * as https from "node:https";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import {
+  averageEndpointThroughput,
+  setModelBenchmarkTPS,
+  setModelBenchmarkTPSMap,
+  type ThroughputStats,
+} from "./throughput";
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 
@@ -70,7 +77,7 @@ function fetchJSON(url, headers = {}): Promise<any> {
 
 // ─── Pricing / Analysis ────────────────────────────────────────────────────────
 
-function parsePricing(p: any) {
+export function parsePricing(p: any) {
   if (!p) return null;
   const input = parseFloat(p.prompt) * 1_000_000;
   const output = parseFloat(p.completion) * 1_000_000;
@@ -83,13 +90,7 @@ function parsePricing(p: any) {
   };
 }
 
-type ThroughputStats = {
-  p90: number | null;
-  p50: number | null;
-  mean: number | null;
-};
-
-function analyzeModels(models: any[], tpsData?: Record<string, ThroughputStats | null>) {
+export function analyzeModels(models: any[], tpsData?: Record<string, ThroughputStats | null>) {
   const entries: any[] = [];
 
   for (const m of models) {
@@ -132,7 +133,7 @@ function analyzeModels(models: any[], tpsData?: Record<string, ThroughputStats |
   return entries;
 }
 
-function findScoped(entries: any[], slugs: { slug: string; label: string }[]) {
+export function findScoped(entries: any[], slugs: { slug: string; label: string }[]) {
   return slugs.map((s) => {
     const e = entries.find((x: any) => x.slug === s.slug);
     return { ...s, entry: e || null, found: !!e };
@@ -155,8 +156,8 @@ async function fetchORData(apiKey: string) {
 }
 
 /**
- * Fetch endpoint-level throughput data for a single model.
- * Returns the full throughput object (p90, p50, mean) or null if unavailable.
+ * Fetch endpoint-level throughput data for a single model and average the
+ * available provider endpoints. Returns p90, p50 and mean or null if unavailable.
  */
 async function fetchEndpointTPS(apiKey: string, slug: string): Promise<ThroughputStats | null> {
   const [author, modelSlug] = slug.split("/");
@@ -170,20 +171,14 @@ async function fetchEndpointTPS(apiKey: string, slug: string): Promise<Throughpu
     const result = await fetchJSON(url, headers);
     const endpoints = result?.data?.endpoints ?? result?.endpoints ?? [];
     if (!Array.isArray(endpoints) || endpoints.length === 0) return null;
-    const tp = endpoints[0]?.throughput_last_30m;
-    if (!tp) return null;
-    return {
-      p90: (tp.p90 != null && !isNaN(tp.p90)) ? tp.p90 : null,
-      p50: (tp.p50 != null && !isNaN(tp.p50)) ? tp.p50 : null,
-      mean: (tp.mean != null && !isNaN(tp.mean)) ? tp.mean : null,
-    };
+    return averageEndpointThroughput(endpoints);
   } catch {
     return null;
   }
 }
 
 /**
- * Fetch p90 throughput for a set of model slugs in parallel.
+ * Fetch provider-averaged p90 throughput for a set of model slugs in parallel.
  * Returns a map of slug → p90 tokens/sec.
  */
 async function fetchTPSForSlugs(apiKey: string, slugs: string[]): Promise<Record<string, number | null>> {
@@ -224,7 +219,7 @@ function saveDailyCache(date: string, data: Record<string, number | null>) {
 
 function ensureDir() { fs.mkdirSync(SNAPSHOT_DIR, { recursive: true }); }
 
-function snapshotAndDiff(entries: any[]) {
+export function snapshotAndDiff(entries: any[]) {
   ensureDir();
   const latestPath = path.join(SNAPSHOT_DIR, "latest.json");
   const prevPath = path.join(SNAPSHOT_DIR, "previous.json");
@@ -330,7 +325,7 @@ function snapshotAndDiff(entries: any[]) {
 
 // ─── Notable Detection ──────────────────────────────────────────────────────────
 
-function findNotable(entries: any[]) {
+export function findNotable(entries: any[]) {
   const notable: any[] = [];
 
   const byAgentic = [...entries].filter((e) => e.indices.agentic != null)
@@ -399,7 +394,7 @@ const FMT = {
   },
 };
 
-function renderScoped(scoped: any[]) {
+export function renderScoped(scoped: any[]) {
   const lines: string[] = [];
 
   // Collect column values for precision alignment
@@ -446,7 +441,7 @@ function renderScoped(scoped: any[]) {
   return lines.join("\n");
 }
 
-function renderNotable(notable: any[]) {
+export function renderNotable(notable: any[]) {
   const lines: string[] = [];
   lines.push("┌─ Notable ───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐");
   for (const n of notable) {
@@ -462,7 +457,7 @@ function renderNotable(notable: any[]) {
   return lines.join("\n");
 }
 
-function renderTop(entries: any[]) {
+export function renderTop(entries: any[]) {
   const ranked = [...entries].filter((e) => e.ipp.blnd != null)
     .sort((a, b) => (b.ipp.blnd || 0) - (a.ipp.blnd || 0));
 
@@ -507,7 +502,7 @@ function renderTop(entries: any[]) {
   return lines.join("\n");
 }
 
-function renderChanges(data: any) {
+export function renderChanges(data: any) {
   if (!data.priorDate) {
     return "No prior snapshot yet. Run /or-metrics a second time later to see changes.";
   }
@@ -548,7 +543,7 @@ function renderChanges(data: any) {
   return lines.join("\n");
 }
 
-function renderTPS(entries: any[]) {
+export function renderTPS(entries: any[]) {
   const ranked = [...entries]
     .filter((e) => e.throughput_p90 != null)
     .sort((a, b) => (b.throughput_p90 || 0) - (a.throughput_p90 || 0));
@@ -580,7 +575,7 @@ function renderTPS(entries: any[]) {
 
 // ─── Extension Entry Point ──────────────────────────────────────────────────────
 
-export default function (pi: ExtensionAPI) {
+export function setupMetrics(pi: ExtensionAPI) {
   // ── State ──
   let cachedEntries: any[] | null = null;
   let cachedScoped: any[] | null = null;
@@ -603,6 +598,7 @@ export default function (pi: ExtensionAPI) {
       const dailyCache = loadDailyCache();
       if (dailyCache && dailyCache.date === today) {
         cachedTPSData = { ...dailyCache.data };
+        setModelBenchmarkTPSMap(cachedTPSData);
         tpsCacheDate = today;
         const cachedCount = Object.keys(cachedTPSData).length;
         ctx.ui.notify(`OR-metrics TPS: loaded ${cachedCount} cached entries from today's cache`, "info");
@@ -628,6 +624,7 @@ export default function (pi: ExtensionAPI) {
         await Promise.all(batch.map(async (slug: string) => {
           const tp = await fetchEndpointTPS(apiKey, slug);
           cachedTPSData[slug] = tp?.p90 ?? null;
+          setModelBenchmarkTPS(slug, cachedTPSData[slug]);
           completed++;
         }));
 
@@ -678,6 +675,7 @@ export default function (pi: ExtensionAPI) {
       const dailyCache = loadDailyCache();
       if (dailyCache && dailyCache.date === today) {
         cachedTPSData = { ...dailyCache.data };
+        setModelBenchmarkTPSMap(cachedTPSData);
       }
 
       // Seed cachedTPSData from entries that already have throughput_p90
@@ -686,6 +684,7 @@ export default function (pi: ExtensionAPI) {
         if (e.throughput_p90 != null && cachedTPSData[e.slug] == null) {
           cachedTPSData[e.slug] = e.throughput_p90;
         }
+        setModelBenchmarkTPS(e.slug, cachedTPSData[e.slug] ?? null);
       }
 
       // Start background TPS fetch (don't await — let it run concurrently)
@@ -739,7 +738,7 @@ export default function (pi: ExtensionAPI) {
 
   // ── Command: /or-metrics ──
   pi.registerCommand("or-metrics", {
-    description: "Show OpenRouter ability-per-price metrics. Args: scoped | notable | top | tps | changes",
+    description: "Show OpenRouter ability-per-price and provider-averaged throughput metrics. Args: scoped | notable | top | tps | changes",
     getArgumentCompletions: (prefix: string) => {
       const opts = ["scoped", "notable", "top", "tps", "changes"];
       return opts.filter((o) => o.startsWith(prefix)).map((o) => ({ value: o, label: o }));
@@ -775,6 +774,7 @@ export default function (pi: ExtensionAPI) {
         const dailyCache = loadDailyCache();
         if (dailyCache && dailyCache.date === today) {
           cachedTPSData = { ...dailyCache.data };
+          setModelBenchmarkTPSMap(cachedTPSData);
           tpsCacheDate = today;
         }
       }
@@ -784,6 +784,7 @@ export default function (pi: ExtensionAPI) {
         if (cachedTPSData[e.slug] != null) {
           e.throughput_p90 = cachedTPSData[e.slug];
         }
+        setModelBenchmarkTPS(e.slug, cachedTPSData[e.slug] ?? null);
       }
 
       const notable = findNotable(cachedEntries);
@@ -826,7 +827,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "or_metrics_query",
     label: "OR Metrics Query",
-    description: "Query OpenRouter ability-per-price metrics for the scoped models or for any tracked model. Use mode='scoped' for our models, mode='top N' for top N by blended IPP, mode='tps' for top models by p90 throughput, mode='find <query>' to search by name, or mode='notable' for analytical highlights. IPP fields: blndcod (BlndCd), blndagnt (BlndAg), cachcod (CachCd), cachagt (CachAg), blnd (BlndAv), cach (CachAv). TPS field: throughput_p90 (p90 tokens/sec over last 30m).",
+    description: "Query OpenRouter ability-per-price metrics for the scoped models or for any tracked model. Use mode='scoped' for our models, mode='top N' for top N by blended IPP, mode='tps' for top models by provider-averaged p90 throughput, mode='find <query>' to search by name, or mode='notable' for analytical highlights. IPP fields: blndcod (BlndCd), blndagnt (BlndAg), cachcod (CachCd), cachagt (CachAg), blnd (BlndAv), cach (CachAv). TPS field: throughput_p90 (provider-averaged p90 tokens/sec over last 30m).",
     parameters: Type.Object({
       mode: Type.String({ description: "scoped | top N | tps | find <query> | notable" }),
     }),

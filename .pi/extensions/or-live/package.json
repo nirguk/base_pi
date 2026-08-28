@@ -1,7 +1,7 @@
 {
-  "name": "openrouter-provider-status",
+  "name": "or-live",
   "version": "0.2.0",
-  "description": "Shows the actual OpenRouter upstream provider that served each request in the footer",
+  "description": "Combined OpenRouter live provider status and model metrics extension",
   "main": "index.ts",
   "type": "module",
   "pi": {

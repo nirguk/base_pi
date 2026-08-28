@@ -5,7 +5,8 @@
  */
 
 import { describe, it, beforeEach, afterEach, expect, vi } from "vitest";
-import openrouterProviderStatus, {
+import {
+  setupProvider as openrouterProviderStatus,
   getGenerationUrl,
   getHeader,
   getProviderName,
@@ -15,10 +16,29 @@ import openrouterProviderStatus, {
   setCachedProvider,
   clearCache,
   clearPendingGenerationLookups,
+  clearTPSObservations,
   loud,
   log,
   logWithCtx,
-} from "../index";
+  formatProviderStatus,
+  formatProviderStatusWithRef,
+  formatProviderTPSStatus,
+  formatProviderTPSStatusWithRef,
+  recordObservedProvider,
+  pruneObservedProviders,
+  clearObservedProviders,
+  type ProviderStatusRef,
+} from "../provider";
+
+function makeRef(overrides: Partial<ProviderStatusRef>): ProviderStatusRef {
+  return {
+    setStatus: vi.fn(),
+    theme: { fg: (color: string, text: string) => `\x1b[2m${text}\x1b[39m` },
+    slug: "acme/model",
+    providerName: "DigitalOcean",
+    ...overrides,
+  };
+}
 
 function createExtensionHarness() {
   const handlers = new Map<string, (...args: any[]) => unknown>();
@@ -40,6 +60,8 @@ afterEach(() => {
   vi.restoreAllMocks();
   clearCache();
   clearPendingGenerationLookups();
+  clearTPSObservations();
+  clearObservedProviders();
 });
 
 // ─── Loud logging ──────────────────────────────────────
@@ -257,5 +279,123 @@ describe("caching", () => {
     // (5 minutes) is long enough that immediate reads always succeed,
     // and the expiry logic in getCachedProvider is covered by code review.
     expect(getCachedProvider("gen-123")).toBe("DigitalOcean");
+  });
+});
+
+// ─── Ref-based formatting helpers ──────────────────────────────
+
+describe("formatProviderStatusWithRef", () => {
+  it("returns the same text as formatProviderStatus when no history is present", () => {
+    const ref = makeRef();
+    const result = formatProviderStatusWithRef("DigitalOcean", "acme/model", ref);
+    expect(result).toBe(formatProviderStatus("DigitalOcean"));
+  });
+
+  it("uses the ref's theme.fg for styled output", () => {
+    const theme = { fg: vi.fn((color: string, text: string) => `styled(${color}:${text})`) };
+    const ref = makeRef({ theme, slug: "acme/model", providerName: "Novita" });
+    const result = formatProviderStatusWithRef("Novita", "acme/model", ref);
+    expect(result).toBe("Provider:Novita ;");
+  });
+
+  it("is a function and does not throw", () => {
+    const ref = makeRef();
+    expect(() => formatProviderStatusWithRef("DigitalOcean", "acme/model", ref)).not.toThrow();
+  });
+});
+
+describe("formatProviderTPSStatusWithRef", () => {
+  it("returns the same text as formatProviderTPSStatus when no history is present", () => {
+    const ref = makeRef();
+    const result = formatProviderTPSStatusWithRef("DigitalOcean", "acme/model", ref);
+    expect(result).toBe(formatProviderTPSStatus("DigitalOcean", "acme/model"));
+  });
+
+  it("is a function and does not throw", () => {
+    const ref = makeRef();
+    expect(() => formatProviderTPSStatusWithRef("DigitalOcean", "acme/model", ref)).not.toThrow();
+  });
+});
+
+describe("ProviderStatusRef", () => {
+  it("has the required shape: setStatus, theme, slug, providerName", () => {
+    const ref: ProviderStatusRef = {
+      setStatus: vi.fn(),
+      theme: { fg: (color: string, text: string) => text },
+      slug: "acme/model",
+      providerName: "DigitalOcean",
+    };
+    expect(typeof ref.setStatus).toBe("function");
+    expect(typeof ref.theme.fg).toBe("function");
+    expect(ref.slug).toBe("acme/model");
+    expect(ref.providerName).toBe("DigitalOcean");
+  });
+});
+
+// ─── History display (grayed-out previous providers) ──────────
+
+describe("formatProviderStatusWithRef history", () => {
+  const theme = { fg: (color: string, text: string) => `\x1b[2m${text}\x1b[39m` };
+
+  it("returns plain text when no previous providers exist", () => {
+    const ref = makeRef({ slug: "acme/model", providerName: "DigitalOcean" });
+    const result = formatProviderStatusWithRef("DigitalOcean", "acme/model", ref);
+    expect(result).toBe("Provider:DigitalOcean ;");
+    expect(result).not.toContain("\x1b[2m");
+  });
+
+  it("appends previous providers dimmed to the right", () => {
+    const ref = makeRef({ slug: "acme/model", providerName: "DigitalOcean" });
+    recordObservedProvider("acme/model", "Novita", Date.now() - 60_000);
+    recordObservedProvider("acme/model", "InferKit", Date.now() - 120_000);
+    const result = formatProviderStatusWithRef("DigitalOcean", "acme/model", ref);
+    expect(result).toContain("Provider:DigitalOcean ;");
+    expect(result).toContain("\x1b[2mNovita\x1b[39m");
+    expect(result).toContain("\x1b[2mInferKit\x1b[39m");
+  });
+
+  it("does not repeat the current provider in the dimmed section", () => {
+    const ref = makeRef({ slug: "acme/model", providerName: "DigitalOcean" });
+    recordObservedProvider("acme/model", "DigitalOcean", Date.now() - 60_000);
+    recordObservedProvider("acme/model", "Novita", Date.now() - 120_000);
+    const result = formatProviderStatusWithRef("DigitalOcean", "acme/model", ref);
+    const dimmedMatches = result.match(/\x1b\[2mDigitalOcean\x1b\[39m/g);
+    expect(dimmedMatches).toBeNull();
+    expect(result).toContain("\x1b[2mNovita\x1b[39m");
+  });
+
+  it("excludes providers older than the rolling window", () => {
+    const ref = makeRef({ slug: "acme/model", providerName: "DigitalOcean" });
+    recordObservedProvider("acme/model", "StaleProvider", Date.now() - 31 * 60 * 1000);
+    const result = formatProviderStatusWithRef("DigitalOcean", "acme/model", ref);
+    expect(result).not.toContain("StaleProvider");
+  });
+
+  it("sorts previous providers most-recent first", () => {
+    const ref = makeRef({ slug: "acme/model", providerName: "DigitalOcean" });
+    recordObservedProvider("acme/model", "Older", Date.now() - 120_000);
+    recordObservedProvider("acme/model", "Newer", Date.now() - 60_000);
+    const result = formatProviderStatusWithRef("DigitalOcean", "acme/model", ref);
+    const newerPos = result.indexOf("\x1b[2mNewer\x1b[39m");
+    const olderPos = result.indexOf("\x1b[2mOlder\x1b[39m");
+    expect(newerPos).toBeLessThan(olderPos);
+  });
+});
+
+describe("formatProviderTPSStatusWithRef history", () => {
+  const theme = { fg: (color: string, text: string) => `\x1b[2m${text}\x1b[39m` };
+
+  it("appends previous providers dimmed alongside TPS info", () => {
+    const ref = makeRef({ slug: "acme/model", providerName: "DigitalOcean" });
+    recordObservedProvider("acme/model", "Novita", Date.now() - 60_000);
+    const result = formatProviderTPSStatusWithRef("DigitalOcean", "acme/model", ref);
+    expect(result).toContain("Provider:DigitalOcean");
+    expect(result).toContain("\x1b[2mNovita\x1b[39m");
+  });
+
+  it("returns plain TPS text when no history exists", () => {
+    const ref = makeRef({ slug: "acme/model", providerName: "DigitalOcean" });
+    const result = formatProviderTPSStatusWithRef("DigitalOcean", "acme/model", ref);
+    expect(result).toBe(formatProviderTPSStatus("DigitalOcean", "acme/model"));
   });
 });
