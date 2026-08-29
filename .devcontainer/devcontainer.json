@@ -18,6 +18,7 @@
     }
   },
   "containerEnv": {
+    "TZ": "Europe/London",
     "GEMINI_API_KEY": "${localEnv:GEMINI_API_KEY}",
     "OPENROUTER_API_KEY": "${localEnv:OPENROUTER_API_KEY}",
     "INCEPTION_API_KEY": "${localEnv:INCEPTION_API_KEY}",
