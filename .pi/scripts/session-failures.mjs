@@ -1,0 +1,275 @@
+#!/usr/bin/env node
+/**
+ * session-failures.mjs — deterministic analysis of failed turns across pi sessions.
+ *
+ * Scans pi session JSONL files under the pi sessions directory (or a custom
+ * directory), and reports assistant turns that failed to complete and tool
+ * calls that errored — grouped by model slug, session, day, or category.
+ *
+ * Deterministic by design:
+ *   - no network calls, no environment drift
+ *   - fixed output ordering (sorted groups, then timestamp, then id)
+ *   - robust JSONL parsing (skips malformed lines instead of aborting the
+ *     whole stream — unlike a single `jq` pass)
+ *
+ * Usage (invoked from pi via /failures, or directly):
+ *   node session-failures.mjs [--dir <PATH>] [--since <DAYS>]
+ *       [--session <ID>] [--by slug|session|day|category] [--kind all|assistant|tool]
+ *       [--json] [--detail] [--limit <N>] [--top <N>]
+ *
+ * Examples:
+ *   /failures                          # summary + per-slug table
+ *   /failures --by session             # grouped per session
+ *   /failures --since 3                # only last 3 days
+ *   /failures --session 01a04da1       # one session (prefix match)
+ *   /failures --json --detail          # machine-readable, full rows
+ *
+ * Exit code 0 = analysis completed (even if zero failures found).
+ */
+
+import { readdirSync, readFileSync } from "node:fs";
+import { join, parse } from "node:path";
+import { homedir } from "node:os";
+
+// ─── Argument parsing (deterministic subset: flags with values or bare flags) ───
+const args = process.argv.slice(2);
+function flag(name, fallback) {
+  const i = args.indexOf(name);
+  return i !== -1 && i + 1 < args.length ? args[i + 1] : fallback;
+}
+function hasFlag(name) {
+  return args.includes(name);
+}
+
+const DIR = flag("--dir", join(homedir(), ".pi", "agent", "sessions"));
+const SINCE_DAYS = Number(flag("--since", "0")) || 0;
+const SESSION_PREFIX = flag("--session", "");
+const BY = flag("--by", "slug");
+const KIND = flag("--kind", "all"); // all | assistant | tool
+const LIMIT = Number(flag("--limit", "0")) || 0;
+const TOP = Number(flag("--top", "0")) || 0;
+const WANT_JSON = hasFlag("--json");
+const WANT_DETAIL = hasFlag("--detail");
+
+if (!["all", "assistant", "tool"].includes(KIND)) {
+  console.error(`Unknown --kind '${KIND}' (expected all|assistant|tool)`);
+  process.exit(2);
+}
+if (!["slug", "session", "day", "category"].includes(BY)) {
+  console.error(`Unknown --by '${BY}' (expected slug|session|day|category)`);
+  process.exit(2);
+}
+
+// ─── Collect all entries from all session files ──────────────────────────────
+const sessionDirs = [];
+try {
+  for (const name of readdirSync(DIR, { withFileTypes: true })) {
+    if (name.isDirectory()) sessionDirs.push(join(DIR, name.name));
+    else if (name.isFile() && name.name.endsWith(".jsonl")) sessionDirs.push(DIR);
+  }
+} catch (err) {
+  console.error(`Cannot read sessions dir ${DIR}: ${err.message}`);
+  process.exit(2);
+}
+if (sessionDirs.length === 0) sessionDirs.push(DIR);
+
+/**
+ * Each failure row is built deterministically:
+ *   ts, kind ("assistant"|"tool"), slug, sessionId, category,
+ *   stop, detail (short one-line description), indexInSession
+ */
+const rows = [];
+
+const cutoffTs = SINCE_DAYS > 0 ? Date.now() - SINCE_DAYS * 86400_000 : 0;
+
+function categoryOf(text, stop) {
+  if (!text) return stop || "unknown";
+  if (/429/.test(text)) return "429 rate-limit";
+  if (/402/.test(text)) return "402 quota";
+  if (/404/.test(text)) return "404 model-gone";
+  if (/[Aa]bort/.test(text)) return "aborted";
+  if (/terminated|Connection error/i.test(text)) return "terminated/conn-error";
+  return "other";
+}
+
+function shortDesc(text, max = 110) {
+  return String(text ?? "")
+    .replace(/\s+/g, " ")
+    .slice(0, max);
+}
+
+for (const dir of sessionDirs) {
+  for (const file of readdirSync(dir).filter((f) => f.endsWith(".jsonl"))) {
+    const fullPath = join(dir, file);
+    let sessionId = parse(file).name;
+    let lines;
+    try {
+      lines = readFileSync(fullPath, "utf8").split("\n");
+    } catch {
+      continue; // unreadable file — skip silently (deterministic: still sorted)
+    }
+
+    const entries = [];
+    for (const raw of lines) {
+      if (!raw.trim()) continue;
+      try {
+        entries.push(JSON.parse(raw));
+      } catch {
+        // malformed line — skip, never abort (robustness vs jq)
+      }
+    }
+
+    // Resolve session id from the session header entry.
+    for (const e of entries) {
+      if (e?.type === "session" && e.id) sessionId = e.id;
+    }
+    if (SESSION_PREFIX && !sessionId.startsWith(SESSION_PREFIX)) continue;
+
+    // Index entries by id for model-slug back-resolution on tool rows.
+    const byId = new Map(entries.map((e, i) => [e?.id, i]));
+    const getEntry = (e) => (e?.parentId && byId.has(e.parentId) ? entries[byId.get(e.parentId)] : null);
+    const modelOf = (e) => {
+      let cur = e;
+      for (let n = 0; n < 40 && cur; n++) {
+        if (cur?.type === "message" && cur.message?.model)
+          return `${cur.message.provider ?? "?"}/${cur.message.model}`;
+        cur = getEntry(cur);
+      }
+      return "?";
+    };
+
+    for (const e of entries) {
+      if (e?.type !== "message" || !e.message) continue;
+      const m = e.message;
+      const tsMs = Date.parse(e.timestamp || "");
+      if (cutoffTs && (!tsMs || tsMs < cutoffTs)) continue;
+      const ts = (e.timestamp || "").slice(0, 19);
+
+      if (m.role === "assistant") {
+        const err = m.errorMessage;
+        if (err) {
+          rows.push({
+            ts,
+            kind: "assistant",
+            slug: `${m.provider ?? "?"}/${m.model ?? "?"}`,
+            sessionId,
+            category: categoryOf(err, m.stopReason),
+            stop: m.stopReason ?? m.rawStopReason ?? "?",
+            detail: shortDesc(err),
+          });
+        }
+      } else if (m.role === "toolResult") {
+        const isErr = m.isError === true || m.details?.isError === true;
+        if (isErr) {
+          const content = Array.isArray(m.content)
+            ? JSON.stringify(m.content)
+            : String(m.content ?? "");
+          rows.push({
+            ts,
+            kind: "tool",
+            slug: modelOf(e),
+            sessionId,
+            category: "tool-error",
+            stop: m.toolName ?? "?",
+            detail: shortDesc(content),
+          });
+        }
+      }
+    }
+  }
+}
+
+// ─── Deterministic ordering: group to be applied later; rows sorted by ts then id ───
+rows.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.sessionId < b.sessionId ? -1 : 1));
+
+// Kind filter
+let filtered = KIND === "all" ? rows : rows.filter((r) => r.kind === KIND);
+
+// ─── Output ──────────────────────────────────────────────────────────────────
+function pad(s, n) {
+  return String(s).padEnd(n);
+}
+
+function table(rowsIn) {
+  const w = {
+    ts: Math.max(10, ...rowsIn.map((r) => r.ts.length)),
+    kind: 10,
+    slug: Math.max(10, ...rowsIn.map((r) => r.slug.length)),
+    cat: Math.max(8, ...rowsIn.map((r) => r.category.length)),
+    stop: Math.max(10, ...rowsIn.map((r) => r.stop.length)),
+  };
+  const header = [
+    pad("ts", w.ts),
+    pad("kind", w.kind),
+    pad("slug", w.slug),
+    pad("session", 13),
+    pad("category", w.cat),
+    pad("stop", w.stop),
+    "detail",
+  ].join("  ");
+  const lines = [header, "-".repeat(header.length)];
+  for (const r of rowsIn) {
+    lines.push(
+      [
+        pad(r.ts, w.ts),
+        pad(r.kind, w.kind),
+        pad(r.slug, w.slug),
+        pad(r.sessionId.slice(0, 13), 13),
+        pad(r.category, w.cat),
+        pad(r.stop, w.stop),
+        r.detail,
+      ].join("  "),
+    );
+  }
+  return lines.join("\n");
+}
+
+const groups = {};
+for (const r of filtered) {
+  const key =
+    BY === "session" ? r.sessionId
+    : BY === "day" ? r.ts.slice(0, 10)
+    : BY === "category" ? r.category
+    : r.slug;
+  groups[key] = groups[key] || [];
+  groups[key].push(r);
+}
+
+const out = [];
+if (WANT_JSON) {
+  out.push(JSON.stringify({ total: filtered.length, by: BY, groups }, null, 2));
+} else {
+  const totalNote = KIND === "all" ? `Failed turns: ${filtered.length}` : `Failed turns: ${filtered.length} (of ${rows.length} total failures; kind="${KIND}")`;
+  out.push(`${totalNote} — grouped by ${BY}`);
+  out.push(`Sessions dir: ${DIR}`);
+  if (cutoffTs) out.push(`Cutoff: last ${SINCE_DAYS} day(s) (files newer than ${new Date(cutoffTs).toISOString().slice(0, 19)}Z)`);
+  out.push("");
+
+  // Group summary table
+  let remaining = filtered.length;
+  const keys = Object.keys(groups).sort((a, b) => groups[b].length - groups[a].length || (a < b ? -1 : 1));
+  const topKeys = TOP > 0 ? keys.slice(0, TOP) : keys;
+  for (const key of topKeys) {
+    const g = groups[key];
+    const pct = remaining > 0 ? Math.round((100 * g.length) / filtered.length) : 0;
+    out.push(`${pad(g.length, 5)} (${pad(pct + "%", 4)})  ${key}`);
+    remaining -= g.length;
+  }
+  out.push("");
+
+  // Detail rows
+  if (WANT_DETAIL) {
+    let shown = 0;
+    for (const key of topKeys) {
+      out.push(`── ${key} ──`);
+      for (const r of groups[key]) {
+        if (LIMIT > 0 && shown >= LIMIT) break;
+        out.push(`  ${r.ts}  [${r.kind}] ${r.slug}  ${r.stop}  ${r.detail}`);
+        shown++;
+      }
+      if (LIMIT > 0 && shown >= LIMIT) break;
+    }
+  }
+}
+
+console.log(out.join("\n"));
