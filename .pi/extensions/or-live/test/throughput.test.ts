@@ -37,13 +37,13 @@ describe("provider-averaged OpenRouter throughput", () => {
 });
 
 describe("rolling provider TPS", () => {
-  it("uses a duration-weighted average and expires samples after 30 minutes", () => {
+  it("uses a duration-weighted average and expires samples after 1 hour", () => {
     const now = 1_000_000;
     recordProviderTPS("acme/model", "Provider A", 100, 10_000, now - 1_000);
     recordProviderTPS("acme/model", "Provider A", 100, 20_000, now);
 
     expect(getProviderRollingTPS("acme/model", "Provider A", now)).toBeCloseTo(6.667, 2);
-    expect(getProviderRollingTPS("acme/model", "Provider A", now + 30 * 60 * 1000 + 1)).toBeNull();
+    expect(getProviderRollingTPS("acme/model", "Provider A", now + 60 * 60 * 1000 + 1)).toBeNull();
   });
 
   it("shows observed and model-average TPS with a performance arrow", () => {

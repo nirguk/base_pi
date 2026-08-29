@@ -63,6 +63,27 @@ const GENERATION_FETCH_TIMEOUT_MS = 30000;
 const GENERATION_RETRY_DELAYS_MS = [1000, 2000, 3000, 4000, 5000, 6000] as const;
 /** TTL (ms) for the in-memory generation-record cache. */
 const CACHE_TTL_MS = 5 * 60 * 1000;
+/** Default rolling window (ms) for provider history display (1 hour). */
+const DEFAULT_HISTORY_WINDOW_MS = 60 * 60 * 1000;
+/** Default cap on how many prior providers are shown in the right zone. */
+const DEFAULT_PRIOR_LIMIT = 8;
+
+/** Live history window (ms). Override via `--or-provider-history-window`. */
+let historyWindowMs = DEFAULT_HISTORY_WINDOW_MS;
+/** Live cap on displayed prior providers. Override via `--or-provider-prior-limit`. */
+let priorLimit = DEFAULT_PRIOR_LIMIT;
+
+/** Override the history window. Called by the registered CLI flag. */
+export function setHistoryWindowMs(value: number | null): void {
+  historyWindowMs = Number.isFinite(value) && value > 0 ? value : DEFAULT_HISTORY_WINDOW_MS;
+}
+/** Override the prior-provider display cap. Called by the registered CLI flag. */
+export function setPriorLimit(value: number | null): void {
+  priorLimit = Number.isFinite(value) && value > 0 ? value : DEFAULT_PRIOR_LIMIT;
+}
+export function getHistoryWindowMs(): number { return historyWindowMs; }
+export function getPriorLimit(): number { return priorLimit; }
+
 /** Rolling window (ms) for per-provider TPS observations before they are pruned. */
 const ROLLING_TPS_WINDOW_MS = 30 * 60 * 1000;
 /** Maximum number of response measurements retained in the in-memory map. */
@@ -201,6 +222,17 @@ interface OrProviderCommandParams {
   ctx: ProviderHandlerCtx;
 }
 
+/** Last known non-blank provider status text, retained so the footer never
+ *  disappears while a deferred generation lookup is pending or failing.
+ *  Updated whenever `setProviderStatus` writes a concrete provider string. */
+let lastKnownProviderText: string | null = null;
+export function getLastKnownProviderText(): string | null {
+  return lastKnownProviderText;
+}
+export function clearLastKnownProviderText(): void {
+  lastKnownProviderText = null;
+}
+
 /** Update the provider status footer: show TPS-enhanced text when it adds information, otherwise the plain provider name. */
 function setProviderStatus(
   providerName: string,
@@ -214,7 +246,11 @@ function setProviderStatus(
   const enhanced = ref
     ? formatProviderTPSStatusWithRef(providerName, slug, ref)
     : formatProviderTPSStatus(providerName, slug);
-  ctx.ui.setStatus("openrouter-provider", enhanced !== baseText ? enhanced : baseText);
+  const text = enhanced !== baseText ? enhanced : baseText;
+  ctx.ui.setStatus("openrouter-provider", text);
+  // Remember so the footer can fall back to a dimmed last-known value
+  // instead of vanishing during the next deferred lookup.
+  lastKnownProviderText = text;
 }
 
 // ─── In-memory cache ────────────────────────────────────────────────────
@@ -236,8 +272,8 @@ export function recordObservedProvider(slug: string, providerName: string, compl
   observedProviders.get(slug)!.set(providerName, completedAt);
 }
 
-export function pruneObservedProviders(slug: string, now = Date.now()): void {
-  const cutoff = now - ROLLING_TPS_WINDOW_MS;
+export function pruneObservedProviders(slug: string, now = Date.now(), windowMs = historyWindowMs): void {
+  const cutoff = now - windowMs;
   const providers = observedProviders.get(slug);
   if (!providers) return;
   for (const [name, ts] of providers) {
@@ -255,7 +291,7 @@ function providerTPSKey(slug: string, providerName: string): string {
 }
 
 function pruneTPSObservations(now = Date.now()): void {
-  const cutoff = now - ROLLING_TPS_WINDOW_MS;
+  const cutoff = now - historyWindowMs;
   for (const [key, observations] of providerTPSObservations) {
     const recent = observations.filter((sample) => sample.completedAt >= cutoff);
     if (recent.length === 0) providerTPSObservations.delete(key);
@@ -629,7 +665,9 @@ async function lookupAndDisplayProvider(
         "openrouter-provider-status: no OpenRouter API key -- set OPENROUTER_API_KEY",
         "warning",
       );
-      ctx.ui.setStatus("openrouter-provider", undefined);
+      // Keep the last-known provider so the footer doesn't vanish on a
+      // transient auth/config problem.
+      ctx.ui.setStatus("openrouter-provider", lastKnownProviderText ?? undefined);
     }
     return;
   }
@@ -653,7 +691,7 @@ async function lookupAndDisplayProvider(
       logWithCtx(ctx, "  -> fetch response status:", res.status, res.statusText);
       if (!res.ok) {
         if (sequence === latestGenerationSequence) {
-          ctx.ui.setStatus("openrouter-provider", undefined);
+          ctx.ui.setStatus("openrouter-provider", lastKnownProviderText ?? undefined);
           ctx.ui.notify(
             `openrouter-provider-status: generation record fetch failed (${res.status}${res.statusText ? ` ${res.statusText}` : ""})`,
             "warning",
@@ -746,6 +784,16 @@ async function flushPendingGenerationLookups(
 export function setupProvider(pi: ExtensionAPI) {
   let currentProviderStatus: ProviderStatusRef | null = null;
 
+  // Register configurable history window / prior-limit as CLI flags.
+  try { pi.registerFlag?.("or-provider-history-window", { description: "History window (ms) for prior providers shown dimmed in the footer", type: "number", default: DEFAULT_HISTORY_WINDOW_MS }); }
+  catch { /* registerFlag may not exist on the test mock */ }
+  try { pi.registerFlag?.("or-provider-prior-limit", { description: "Max prior providers shown dimmed in the footer", type: "number", default: DEFAULT_PRIOR_LIMIT }); }
+  catch { /* registerFlag may not exist on the test mock */ }
+  try { setHistoryWindowMs(pi.getFlag?.("or-provider-history-window") ?? DEFAULT_HISTORY_WINDOW_MS); }
+  catch { /* getFlag may not exist on the test mock */ }
+  try { setPriorLimit(pi.getFlag?.("or-provider-prior-limit") ?? DEFAULT_PRIOR_LIMIT); }
+  catch { /* getFlag may not exist on the test mock */ }
+
   // If OR-metrics finishes its background endpoint fetch after a response,
   // refresh the same footer immediately instead of waiting for another turn.
   const unsubscribeBenchmarkUpdates = subscribeModelBenchmarkTPS((slug) => {
@@ -805,14 +853,22 @@ export function setupProvider(pi: ExtensionAPI) {
     if (!isOpenRouterRequest(ctx)) {
       logWithCtx(ctx, "  -> not an OpenRouter request, clearing status");
       currentProviderStatus = null;
+      lastKnownProviderText = null;
       advanceGenerationSequence();
       ctx.ui.setStatus("openrouter-provider", undefined);
       return;
     }
 
     // A new request supersedes the provider/TPS pair from the previous one.
-    currentProviderStatus = null;
-    ctx.ui.setStatus("openrouter-provider", undefined);
+    // IMPORTANT: do not blank the footer — keep the last-known provider text
+    // so the user doesn't see it vanish while the deferred generation lookup
+    // is in flight. A failed lookup now falls back to this value instead of
+    // leaving the footer empty.
+    if (lastKnownProviderText) {
+      ctx.ui.setStatus("openrouter-provider", lastKnownProviderText);
+    } else {
+      ctx.ui.setStatus("openrouter-provider", undefined);
+    }
 
     const headers = event.headers;
     logWithCtx(ctx, "  -> headers available:", !!headers);
@@ -915,6 +971,7 @@ export function setupProvider(pi: ExtensionAPI) {
   pi.on("session_shutdown", () => {
     unsubscribeBenchmarkUpdates();
     currentProviderStatus = null;
+    lastKnownProviderText = null;
   });
 
   // ── Command: /or-provider ──────────────────────────────────────────

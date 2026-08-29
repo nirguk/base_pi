@@ -371,9 +371,9 @@ describe("formatProviderStatusWithRef history", () => {
     expect(result).toContain("\x1b[2mNovita\x1b[39m");
   });
 
-  it("excludes providers older than the rolling window", () => {
+  it("excludes providers older than the 1-hour rolling window", () => {
     const ref = makeRef({ slug: "acme/model", providerName: "DigitalOcean" });
-    recordObservedProvider("acme/model", "StaleProvider", Date.now() - 31 * 60 * 1000);
+    recordObservedProvider("acme/model", "StaleProvider", Date.now() - 61 * 60 * 1000);
     pruneObservedProviders("acme/model");
     const result = formatProviderStatusWithRef("DigitalOcean", "acme/model", ref);
     expect(result).not.toContain("StaleProvider");
