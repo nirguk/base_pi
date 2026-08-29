@@ -2,3 +2,6 @@ node_modules/
 .devcontainer-lock.json
 .DS_Store
 *.log
+
+# pi-llm-debugging output (provider request/response payloads)
+pi-llm-debugging/
