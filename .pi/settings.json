@@ -12,17 +12,30 @@
   "subagents": {
     "defaultProvider": "openrouter",
     "agentOverrides": {
-      "oracle":     { "model": "deepseek/deepseek-v4-flash-0731" },
-      "reviewer":   { "model": "deepseek/deepseek-v4-flash-0731" },
-      "worker":     { "model": "inclusionai/ling-3.0-flash" },
-      "researcher": { "model": "inclusionai/ling-3.0-flash" },
-      "scout":      { "model": "inclusionai/ling-3.0-flash" },
-      "delegate":   { "model": "inherit" }
+      "oracle": {
+        "model": "deepseek/deepseek-v4-flash-0731"
+      },
+      "reviewer": {
+        "model": "deepseek/deepseek-v4-flash-0731"
+      },
+      "worker": {
+        "model": "inclusionai/ling-3.0-flash"
+      },
+      "researcher": {
+        "model": "inclusionai/ling-3.0-flash"
+      },
+      "scout": {
+        "model": "inclusionai/ling-3.0-flash"
+      },
+      "delegate": {
+        "model": "inherit"
+      }
     }
   },
   "packages": [
     "npm:pi-web-access",
-    "npm:pi-subagents"
+    "npm:pi-subagents",
+    "git:github.com/nirguk/pi-session-analyzer"
   ],
   "skills": [
     "s",
