@@ -1,0 +1,111 @@
+# Report: Mid-stream generation terminations on `deepseek/deepseek-v4-flash-0731`
+
+**Account:** workspace `3db9a730-07db-5f45-b546-6f017d3c6446` (app_id 2853275, client `pi`)
+**Window:** 2026-08-29, ~17:00–21:00 UTC
+**Symptom:** OpenAI-compatible streaming requests accepted with HTTP 200, then the SSE
+connection is cut mid-stream with no error frame. Client (Node/undici) sees a bare
+`TypeError: terminated`; `finish_reason` never arrives. Retries reproduce at high rates.
+
+## Evidence summary
+
+Queried `GET /api/v1/generation?id=...` for **138** failed turns captured by our client
+(120 resolvable; 18 return "Generation not found" — likely dropped pre-logging).
+
+### 1. Deaths are mid-stream, not rejections
+
+Of 120 resolvable failed generations:
+
+| finish_reason | native | cancelled | count |
+|---|---|---|---|
+| `null` | `null` | `true` | 101 |
+| `tool_calls` | `tool_calls` | `false` | 19 |
+
+- The 101: upstream generated a median of **1,682 completion tokens** (min 1, max 5,455,
+  all reasoning tokens), then the stream was cut with **no finish reason**. Usage reported
+  as 0 (not billed).
+- The 19: upstream **completed** with `finish_reason: tool_calls`, but the client socket
+  was closed before the final frames arrived (tail-cut after completion).
+- 0 of 120 died before the first token — every one was accepted and actively generating.
+
+### 2. Deaths cluster just under 30 seconds
+
+`generation_time` distribution of the 101 mid-stream deaths (5s buckets):
+
+```
+0-5s:5  5-10s:4  10-15s:6  15-20s:5  20-25s:16  25-30s:65  >30s:0
+```
+
+- **33% land in [29.0s, 30.0s)**; **none exceed 30s** — consistent with a hard ~30s
+  cutoff (total-time or no-data watchdog) somewhere in the OpenRouter → upstream path.
+- The 19 post-completion tail-cuts do run longer (up to 59s), i.e. they escaped the cutoff
+  because upstream had already finished.
+
+### 3. One subprovider (Relace) is massively over-represented
+
+Control group: 150 successful generations sampled from the same window (of 348 total),
+same model, same client. The "death rate" column is
+`dead / (ok_sampled + dead)` — the fraction of that provider's served requests that
+died mid-stream.
+
+| provider | ok (sample) | dead | served | death rate |
+|---|---|---|---|---|
+| **Relace** | 46 | 80 | 126 | **≈63%** (43% if ok scaled ×2.32 to full window) |
+| Upstage | 0 | 7 | 7 | 100% (n=7, low traffic) |
+| Modal | 0 | 6 | 6 | 100% (n=6, low traffic) |
+| Z.AI | 0 | 3 | 3 | 100% (n=3, low traffic) |
+| Sail Research | 0 | 1 | 1 | 100% (n=1) |
+| DigitalOcean | 6 | 2 | 8 | 25% |
+| OpenAI | 6 | 1 | 7 | 14% |
+| Baidu | 20 | 1 | 21 | 5% |
+| Poolside | 61 | 0 | 61 | **0%** |
+| Novita | 11 | 0 | 11 | **0%** |
+
+Equivalently, as traffic shares: Relace carried ~31% of successful traffic but
+~79% of mid-stream deaths. Poolside and Novita served substantial traffic with
+**zero** deaths. The 100%-rate providers served few requests (likely only routed when
+preferred providers were busy), so their rates are noisy but consistently bad.
+
+### 4. Uptime telemetry does not reflect this failure mode
+
+Your public endpoints API showed Relace at **99.21% uptime (1d) / 99.69% (30m)** for this
+model while it was killing ~2 of every 3 streams it served for us. Mid-stream
+terminations are recorded as `cancelled: true, usage: 0` and appear not to count against
+endpoint uptime. Clients cannot see this failure mode from any public metric.
+
+## Per-generation evidence
+
+Full table attached: `or-terminated-generations.csv` (120 rows:
+`ts, generation_id, provider, generation_time_ms, cancelled, finish_reason,
+tokens_completion`).
+
+Representative example (`gen-1788034654-iVR584dUNUrc8GvYSbLN`,
+`request_id req-1788034654-ym2NR3bYS4vn31r6YvxS`, upstream_id
+`be1ac444b6e749c2af1f4f6eee6b2f81`):
+
+```json
+{"provider_name":"Relace","cancelled":true,"finish_reason":null,
+ "latency":330,"generation_time":18180,"tokens_prompt":24896,
+ "tokens_completion":1595,"native_tokens_reasoning":1595,"usage":0,
+ "provider_responses":[{"provider_name":"Relace","status":200}]}
+```
+
+Upstream returned HTTP 200 and generated 1,595 reasoning tokens; the stream was then cut.
+
+## Asks
+
+1. Investigate the Relace endpoint for `deepseek/deepseek-v4-flash-20260731` — high
+   mid-stream termination rate (~63% in our sample), with generation_time clustering
+   under a ~30s wall.
+2. Confirm whether a ~30s total-time or no-data watchdog exists in the OpenRouter proxy
+   path (or is inherited from upstream LBs) and whether it can be raised for
+   long-reasoning streams.
+3. Count mid-stream terminations (`cancelled + no finish_reason`) in endpoint
+   uptime/health metrics, or expose them per endpoint — currently they are invisible, so
+   `provider.order`/`only` routing cannot be configured sensibly.
+4. Clarify the 19 cases where upstream completed (`finish_reason: tool_calls`) but the
+   client socket was closed before the stream tail.
+
+## Attachment
+
+`or-terminated-generations.csv` — timestamps, generation IDs, serving provider,
+generation_time, cancelled flag, finish_reason, tokens generated before death.
