@@ -894,6 +894,27 @@ export function setupMetrics(pi: ExtensionAPI) {
   let tpsCacheDate: string | null = null;
   let tpsFetchInProgress: boolean = false;
   let tpsFetchPromise: Promise<void> | null = null;
+  // Background work may outlive the session that started it. Once the session
+  // is replaced, the captured context becomes stale and must not be touched.
+  let sessionActive = true;
+
+  function tryNotify(ctx: MetricsCommandCtx, msg: string, level: "info" | "warning" | "error"): void {
+    if (!sessionActive) return;
+    try {
+      ctx.ui.notify(msg, level);
+    } catch {
+      // The context may have become stale between the active check and access.
+    }
+  }
+
+  function trySetStatus(ctx: MetricsCommandCtx, key: string, msg: string | undefined): void {
+    if (!sessionActive) return;
+    try {
+      ctx.ui.setStatus(key, msg);
+    } catch {
+      // The context may have become stale between the active check and access.
+    }
+  }
 
   /**
    * Fetch p90 throughput for all tracked models in parallel batches.
@@ -911,18 +932,18 @@ export function setupMetrics(pi: ExtensionAPI) {
         setModelBenchmarkTPSMap(cachedTPSData);
         tpsCacheDate = today;
         const cachedCount = Object.keys(cachedTPSData).length;
-        ctx.ui.notify(`OR-metrics TPS: loaded ${cachedCount} cached entries from today's cache`, "info");
+        tryNotify(ctx, `OR-metrics TPS: loaded ${cachedCount} cached entries from today's cache`, "info");
       }
 
       const allSlugs = cachedEntries?.map((e: ModelEntry) => e.slug) ?? [];
       const remaining = allSlugs.filter((slug: string) => cachedTPSData[slug] == null);
 
       if (remaining.length === 0) {
-        ctx.ui.notify("OR-metrics TPS: all models already cached ✓", "info");
+        tryNotify(ctx, "OR-metrics TPS: all models already cached ✓", "info");
         return;
       }
 
-      ctx.ui.notify(`OR-metrics TPS: fetching p90 for ${remaining.length} models…`, "info");
+      tryNotify(ctx, `OR-metrics TPS: fetching p90 for ${remaining.length} models…`, "info");
 
       let completed = 0;
       const total = remaining.length;
@@ -943,15 +964,15 @@ export function setupMetrics(pi: ExtensionAPI) {
         const now = Date.now();
         if (now - lastProgressAt >= TPS_CACHE_PROGRESS_INTERVAL) {
           lastProgressAt = now;
-          ctx.ui.notify(`OR-metrics TPS: ${completed}/${total} models fetched…`, "info");
+          tryNotify(ctx, `OR-metrics TPS: ${completed}/${total} models fetched…`, "info");
         }
       }
 
       saveDailyCache(today, cachedTPSData);
-      ctx.ui.notify("<<< OR-metrics TPS gathering complete — rerun for full stats >>>", "info");
+      tryNotify(ctx, "<<< OR-metrics TPS gathering complete — rerun for full stats >>>", "info");
     } catch (error: unknown) {
       // Background failures must not become unhandled promise rejections.
-      ctx.ui.notify(`OR-metrics TPS gathering failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
+      tryNotify(ctx, `OR-metrics TPS gathering failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
     } finally {
       tpsFetchInProgress = false;
       tpsFetchPromise = null;
@@ -960,14 +981,14 @@ export function setupMetrics(pi: ExtensionAPI) {
 
   // Shared fetch-and-analyze (interactive only)
   async function refresh(ctx: MetricsCommandCtx): Promise<MetricsRefreshResult | null> {
-    if (!ctx.hasUI) return null;
+    if (!sessionActive || !ctx.hasUI) return null;
     const apiKey = process.env.OPENROUTER_API_KEY || "";
     if (!apiKey) {
-      ctx.ui.notify("No OPENROUTER_API_KEY set. OR metrics unavailable.", "warning");
+      tryNotify(ctx, "No OPENROUTER_API_KEY set. OR metrics unavailable.", "warning");
       return null;
     }
 
-    ctx.ui.setStatus("or-metrics", "Pi metrics: fetching…");
+    trySetStatus(ctx, "or-metrics", "Pi metrics: fetching…");
     try {
       const entries = await fetchORData(apiKey);
       const scoped = findScoped(entries, activeScopedSlugs);
@@ -1000,7 +1021,7 @@ export function setupMetrics(pi: ExtensionAPI) {
       // Start background TPS fetch (don't await — let it run concurrently)
       tpsFetchPromise = fetchAllTPSAsync(apiKey, ctx);
 
-      ctx.ui.setStatus("or-metrics", `Pi is tracking ${entries.length} models`);
+      trySetStatus(ctx, "or-metrics", `Pi is tracking ${entries.length} models`);
 
       // Notify on changes — rich color-coded summary
       if (data.priorDate) {
@@ -1023,15 +1044,15 @@ export function setupMetrics(pi: ExtensionAPI) {
           parts.push(`🗑️ ${data.removed.join(", ")} (gone)`);
         }
         if (parts.length === 0) {
-          ctx.ui.notify(`OR metrics: ✓ no changes since ${data.priorDate}`, "info");
+          tryNotify(ctx, `OR metrics: ✓ no changes since ${data.priorDate}`, "info");
         } else {
-          ctx.ui.notify(`OR metrics: ${parts.join(" · ")}`, "info");
+          tryNotify(ctx, `OR metrics: ${parts.join(" · ")}`, "info");
         }
       }
       return data;
     } catch (e: unknown) {
-      ctx.ui.setStatus("or-metrics", "Pi metrics: fetch failed");
-      ctx.ui.notify(`OR metrics fetch failed: ${e instanceof Error ? e.message : String(e)}`, "error");
+      trySetStatus(ctx, "or-metrics", "Pi metrics: fetch failed");
+      tryNotify(ctx, `OR metrics fetch failed: ${e instanceof Error ? e.message : String(e)}`, "error");
       return null;
     }
   }
@@ -1045,6 +1066,10 @@ export function setupMetrics(pi: ExtensionAPI) {
       label: useNames ? (sm.model.name || sm.model.id) : sm.model.id,
     }));
     refresh(ctx);
+  });
+
+  pi.on("session_shutdown", () => {
+    sessionActive = false;
   });
 
   // ── Command: /or-metrics ──

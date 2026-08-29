@@ -16,15 +16,30 @@
  *   node session-failures.mjs [--dir <PATH>] [--since <DAYS>]
  *       [--session <ID>] [--by provider|slug|session|day|category] [--kind all|assistant|tool]
  *       [--json] [--detail] [--limit <N>] [--top <N>]
+ *       [--secondary provider|slug|session|day|category]
+ *
+ * The default view is a primary × secondary cross-tab: `/failures`
+ * behaves like `--by provider --secondary category`, i.e. providers as
+ * rows with error-type breakouts. Pass `--secondary ""` (or an explicit
+ * `--by` with `--secondary` equal to it) to collapse back to a single-
+ * dimension summary.
  *
  * Provider lens (the default): each failure is attributed to the OpenRouter
- *   upstream provider that actually served it (e.g. baidu, digitalocean,
+ *   upstream provider that actually served them (e.g. baidu, digitalocean,
  *   novita, deepinfra, z.ai) — parsed from the `provider_name` embedded
  *   in the JSON error body within provider-error messages (handles the
  *   `provider_name":"Value"` JSON format that a simple regex cannot).
  *   Falls back to the pinned route (`openrouter-baidu` → `baidu`), then
  *   the parent model chain, then "unknown". The old per-model slug
  *   grouping stays available via `--by slug`.
+ *
+ * Cross-tabulation (`--secondary <dim>`): when a secondary dimension is
+ *   supplied, the summary view renders a primary × secondary count matrix
+ *   (e.g. `--by provider --secondary category` shows, per provider, how
+ *   many failures fall into each category; `--by category --secondary
+ *   provider` inverts the view). With `--detail`, the primary grouping
+ *   alone is used for both the summary and the per-group breakdown rows.
+ *   `--secondary` is ignored under `--json`.
  *
  * Examples:
  *   /failures                          # summary + per-provider table (default)
@@ -33,6 +48,8 @@
  *   /failures --since 3                # only last 3 days
  *   /failures --session 01a04da1       # one session (prefix match)
  *   /failures --json --detail          # machine-readable, full rows
+ *   /failures --by provider --secondary category  # cross-tab: errors per provider
+ *   /failures --by category --secondary provider  # inverted cross-tab
  *
  * Exit code 0 = analysis completed (even if zero failures found).
  */
@@ -55,18 +72,37 @@ const DIR = flag("--dir", join(homedir(), ".pi", "agent", "sessions"));
 const SINCE_DAYS = Number(flag("--since", "0")) || 0;
 const SESSION_PREFIX = flag("--session", "");
 const BY = flag("--by", "provider");
+const SECONDARY = flag("--secondary", "category"); // default: crosstab error reasons under the primary grouping
 const KIND = flag("--kind", "all"); // all | assistant | tool
 const LIMIT = Number(flag("--limit", "0")) || 0;
 const TOP = Number(flag("--top", "0")) || 0;
 const WANT_JSON = hasFlag("--json");
 const WANT_DETAIL = hasFlag("--detail");
 
+const DIMENSIONS = ["provider", "slug", "session", "day", "category"];
+/**
+ * Resolve a row's value for a given dimension, used for both grouping and
+ * secondary cross-tabulation.
+ */
+function valueOf(r, dim) {
+  return dim === "provider" ? r.provider
+       : dim === "slug" ? r.slug
+       : dim === "session" ? r.sessionId
+       : dim === "day" ? r.ts.slice(0, 10)
+       : dim === "category" ? r.category
+       : "?";
+}
+
 if (!["all", "assistant", "tool"].includes(KIND)) {
   console.error(`Unknown --kind '${KIND}' (expected all|assistant|tool)`);
   process.exit(2);
 }
-if (!["provider", "slug", "session", "day", "category"].includes(BY)) {
-  console.error(`Unknown --by '${BY}' (expected provider|slug|session|day|category)`);
+if (!DIMENSIONS.includes(BY)) {
+  console.error(`Unknown --by '${BY}' (expected ${DIMENSIONS.join("|")})`);
+  process.exit(2);
+}
+if (SECONDARY && !DIMENSIONS.includes(SECONDARY)) {
+  console.error(`Unknown --secondary '${SECONDARY}' (expected ${DIMENSIONS.join("|")})`);
   process.exit(2);
 }
 
@@ -310,23 +346,52 @@ function table(rowsIn) {
 }
 
 const groups = {};
+const byDim = BY;
+// A secondary dimension equal to the primary one is meaningless (e.g.
+// category×category collapses to one column) — clear it so the single-dim
+// view is shown instead.
+const secDim = SECONDARY && SECONDARY !== byDim ? SECONDARY : "";
 for (const r of filtered) {
-  const key =
-    BY === "provider" ? r.provider
-    : BY === "session" ? r.sessionId
-    : BY === "day" ? r.ts.slice(0, 10)
-    : BY === "category" ? r.category
-    : r.slug;
+  const key = valueOf(r, byDim);
   groups[key] = groups[key] || [];
   groups[key].push(r);
 }
 
+// Pre-compute secondary cross-tab per primary group: a nested counts map.
+const crossTabs = secDim ? {} : null;
+if (crossTabs) {
+  for (const key of Object.keys(groups)) {
+    const counts = {};
+    for (const r of groups[key]) {
+      const s = valueOf(r, secDim);
+      counts[s] = (counts[s] || 0) + 1;
+    }
+    crossTabs[key] = counts;
+  }
+}
+
+function allSecondaryKeys(crossTabs, topKeys) {
+  const seen = [];
+  for (const k of topKeys) {
+    for (const s of Object.keys(crossTabs[k] || {})) {
+      if (!seen.includes(s)) seen.push(s);
+    }
+  }
+  return seen;
+}
+
 const out = [];
+const hasCross = !!crossTabs;
 if (WANT_JSON) {
-  out.push(JSON.stringify({ total: filtered.length, by: BY, groups }, null, 2));
+  const payload = { total: filtered.length, by: byDim, groups };
+  if (hasCross) payload.secondary = secDim;
+  out.push(JSON.stringify(payload, null, 2));
 } else {
+  const label = hasCross && WANT_DETAIL
+    ? `${byDim} → ${secDim}`
+    : byDim;
   const totalNote = KIND === "all" ? `Failed turns: ${filtered.length}` : `Failed turns: ${filtered.length} (of ${rows.length} total failures; kind="${KIND}")`;
-  out.push(`${totalNote} — grouped by ${BY}`);
+  out.push(`${totalNote} — grouped by ${label}`);
   out.push(`Sessions dir: ${DIR}`);
   if (cutoffTs) out.push(`Cutoff: last ${SINCE_DAYS} day(s) (files newer than ${new Date(cutoffTs).toISOString().slice(0, 19)}Z)`);
   out.push("");
@@ -335,13 +400,34 @@ if (WANT_JSON) {
   let remaining = filtered.length;
   const keys = Object.keys(groups).sort((a, b) => groups[b].length - groups[a].length || (a < b ? -1 : 1));
   const topKeys = TOP > 0 ? keys.slice(0, TOP) : keys;
-  for (const key of topKeys) {
-    const g = groups[key];
-    const pct = remaining > 0 ? Math.round((100 * g.length) / filtered.length) : 0;
-    out.push(`${pad(g.length, 5)} (${pad(pct + "%", 4)})  ${key}`);
-    remaining -= g.length;
+
+  if (hasCross && !WANT_DETAIL) {
+    // Cross-tab summary: primary × secondary counts
+    const secKeys = allSecondaryKeys(crossTabs, keys);
+    const labelW = Math.max(byDim.length, ...keys.map((k) => String(k).length));
+    const headerLine = pad(byDim, labelW) + secKeys.map((s) => `  ${pad(String(s), 11)}`).join("") + "  total";
+    out.push(headerLine);
+    out.push("-".repeat(headerLine.length));
+    for (const key of topKeys) {
+      const counts = crossTabs[key];
+      const total = groups[key].length;
+      const cells = secKeys.map((s) => {
+        const v = counts[s] || 0;
+        return `  ${pad(String(v), 11)}`;
+      }).join("");
+      out.push(`${pad(key, labelW)}${cells}  ${total}`);
+    }
+    out.push("");
+  } else {
+    // Single-dimension summary table
+    for (const key of topKeys) {
+      const g = groups[key];
+      const pct = remaining > 0 ? Math.round((100 * g.length) / filtered.length) : 0;
+      out.push(`${pad(g.length, 5)} (${pad(pct + "%", 4)})  ${key}`);
+      remaining -= g.length;
+    }
+    out.push("");
   }
-  out.push("");
 
   // Detail rows
   if (WANT_DETAIL) {
@@ -350,7 +436,8 @@ if (WANT_JSON) {
       out.push(`── ${key} ──`);
       for (const r of groups[key]) {
         if (LIMIT > 0 && shown >= LIMIT) break;
-        out.push(`  ${r.ts}  [${r.kind}] ${r.slug}  ${r.stop}  ${r.detail}`);
+        const extra = secDim ? `  [${valueOf(r, secDim)}]` : "";
+        out.push(`  ${r.ts}  [${r.kind}] ${r.slug}  ${r.stop}${extra}  ${r.detail}`);
         shown++;
       }
       if (LIMIT > 0 && shown >= LIMIT) break;
