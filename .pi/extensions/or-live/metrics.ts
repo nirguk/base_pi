@@ -122,6 +122,7 @@ interface SnapshotPayload {
 }
 
 interface DiffChange {
+  slug: string;
   name: string;
   metric: string;
   old: number;
@@ -165,6 +166,8 @@ interface MetricsCommandCtx {
   ui: { notify: (msg: string, level: string) => void; setStatus: (key: string, msg: string | undefined) => void };
   model?: { id: string };
   scopedModels?: { model: { id: string; name?: string } }[];
+  /** Override display mode: "names" to show human-readable names, "slugs" (default) to show slugs. */
+  displayModelNames?: boolean;
 }
 
 // ─── Config ────────────────────────────────────────────────────────────────────
@@ -182,6 +185,20 @@ const TPS_CACHE_FILE = path.join(TPS_CACHE_DIR, "tps-cache.json");
 const TPS_CACHE_BATCH_SIZE = 20;
 const TPS_CACHE_PROGRESS_INTERVAL = 1000;
 const DEFAULT_CACHE_RATE = parseFloat(process.env.OR_CACHE_RATE || "0.7");
+
+/**
+ * When true, display human-readable model names instead of slugs.
+ * Defaults to false (show slugs). Set OR_METRICS_DISPLAY_MODEL_NAMES=1
+ * or OR_METRICS_DISPLAY_MODEL_NAMES=true to show names.
+ */
+const DISPLAY_MODEL_NAMES =
+  process.env.OR_METRICS_DISPLAY_MODEL_NAMES === "1" ||
+  process.env.OR_METRICS_DISPLAY_MODEL_NAMES === "true";
+
+/** Return the display label for a model entry: slug (default) or name. */
+function modelLabel(e: ModelEntry): string {
+  return DISPLAY_MODEL_NAMES ? (e.name || e.slug) : e.slug;
+}
 
 // Populated from ctx.scopedModels at session start
 let activeScopedSlugs: { slug: string; label: string }[] = [];
@@ -408,10 +425,10 @@ function computeDiff(prior: SnapshotPayload, current: SnapshotPayload): DiffResu
 
   added = current.models
     .filter((m) => !priorIdx[m.slug])
-    .map((m) => m.name);
+    .map((m) => DISPLAY_MODEL_NAMES ? m.name : m.slug);
   removed = (prior.models || [])
     .filter((m) => !currIdx[m.slug])
-    .map((m) => m.name);
+    .map((m) => DISPLAY_MODEL_NAMES ? m.name : m.slug);
 
   for (const slug of Object.keys(currIdx)) {
     if (!priorIdx[slug]) continue;
@@ -419,27 +436,27 @@ function computeDiff(prior: SnapshotPayload, current: SnapshotPayload): DiffResu
     const c = currIdx[slug];
     if (p.coding_index != null && c.coding_index != null) {
       const d = c.coding_index - p.coding_index;
-      if (Math.abs(d) >= 0.5) changes.push({ name: c.name, metric: "coding", old: p.coding_index, new: c.coding_index, delta: d });
+      if (Math.abs(d) >= 0.5) changes.push({ slug: c.slug, name: c.name, metric: "coding", old: p.coding_index, new: c.coding_index, delta: d });
     }
     if (p.agentic_index != null && c.agentic_index != null) {
       const d = c.agentic_index - p.agentic_index;
-      if (Math.abs(d) >= 0.5) changes.push({ name: c.name, metric: "agentic", old: p.agentic_index, new: c.agentic_index, delta: d });
+      if (Math.abs(d) >= 0.5) changes.push({ slug: c.slug, name: c.name, metric: "agentic", old: p.agentic_index, new: c.agentic_index, delta: d });
     }
     if (p.blended_cost_per_m != null && c.blended_cost_per_m != null) {
       const d = ((c.blended_cost_per_m - p.blended_cost_per_m) / p.blended_cost_per_m) * 100;
-      if (Math.abs(d) >= 5) changes.push({ name: c.name, metric: "price", old: p.blended_cost_per_m, new: c.blended_cost_per_m, delta: d });
+      if (Math.abs(d) >= 5) changes.push({ slug: c.slug, name: c.name, metric: "price", old: p.blended_cost_per_m, new: c.blended_cost_per_m, delta: d });
     }
     if (p.throughput_p90 != null && c.throughput_p90 != null) {
       const d = c.throughput_p90 - p.throughput_p90;
-      if (Math.abs(d) >= 5) changes.push({ name: c.name, metric: "throughput_p90", old: p.throughput_p90, new: c.throughput_p90, delta: d });
+      if (Math.abs(d) >= 5) changes.push({ slug: c.slug, name: c.name, metric: "throughput_p90", old: p.throughput_p90, new: c.throughput_p90, delta: d });
     }
     if (p.throughput_p50 != null && c.throughput_p50 != null) {
       const d = c.throughput_p50 - p.throughput_p50;
-      if (Math.abs(d) >= 5) changes.push({ name: c.name, metric: "throughput_p50", old: p.throughput_p50, new: c.throughput_p50, delta: d });
+      if (Math.abs(d) >= 5) changes.push({ slug: c.slug, name: c.name, metric: "throughput_p50", old: p.throughput_p50, new: c.throughput_p50, delta: d });
     }
     if (p.throughput_mean != null && c.throughput_mean != null) {
       const d = c.throughput_mean - p.throughput_mean;
-      if (Math.abs(d) >= 5) changes.push({ name: c.name, metric: "throughput_mean", old: p.throughput_mean, new: c.throughput_mean, delta: d });
+      if (Math.abs(d) >= 5) changes.push({ slug: c.slug, name: c.name, metric: "throughput_mean", old: p.throughput_mean, new: c.throughput_mean, delta: d });
     }
   }
 
@@ -477,23 +494,23 @@ export function snapshotAndDiff(entries: ModelEntry[]) {
 // ─── Notable Detection ──────────────────────────────────────────────────────────
 
 export function findNotable(entries: ModelEntry[]) {
-  const notable: { category: string; models: { name: string; v: number }[] }[] = [];
+  const notable: { category: string; models: { slug: string; name: string; v: number }[] }[] = [];
 
   const byAgentic = [...entries].filter((e) => e.indices.agentic != null)
     .sort((a, b) => (b.indices.agentic || 0) - (a.indices.agentic || 0));
-  notable.push({ category: "🏆 Best Agentic Ability (raw)", models: byAgentic.slice(0, 5).map((e) => ({ name: e.name, v: e.indices.agentic })) });
+  notable.push({ category: "🏆 Best Agentic Ability (raw)", models: byAgentic.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.indices.agentic })) });
 
   const byCoding = [...entries].filter((e) => e.indices.coding != null)
     .sort((a, b) => (b.indices.coding || 0) - (a.indices.coding || 0));
-  notable.push({ category: "💻 Best Coding Ability (raw)", models: byCoding.slice(0, 5).map((e) => ({ name: e.name, v: e.indices.coding })) });
+  notable.push({ category: "💻 Best Coding Ability (raw)", models: byCoding.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.indices.coding })) });
 
   const byBlendedIPP = [...entries].filter((e) => e.ipp.blnd != null)
     .sort((a, b) => (b.ipp.blnd || 0) - (a.ipp.blnd || 0));
-  notable.push({ category: "💰 Best Blended IPP (ability-per-price, blended costs)", models: byBlendedIPP.slice(0, 5).map((e) => ({ name: e.name, v: e.ipp.blnd })) });
+  notable.push({ category: "💰 Best Blended IPP (ability-per-price, blended costs)", models: byBlendedIPP.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.ipp.blnd })) });
 
   const byCachedIPP = [...entries].filter((e) => e.ipp.cach != null)
     .sort((a, b) => (b.ipp.cach || 0) - (a.ipp.cach || 0));
-  notable.push({ category: "🔄 Best Cached IPP (70% cache assumed)", models: byCachedIPP.slice(0, 5).map((e) => ({ name: e.name, v: e.ipp.cach })) });
+  notable.push({ category: "🔄 Best Cached IPP (70% cache assumed)", models: byCachedIPP.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.ipp.cach })) });
 
   return notable;
 }
@@ -564,32 +581,80 @@ export function renderScoped(scoped: ScopedModelEntry[]) {
   }
   const costDec = columnPrecision(costVals, 4);
   const tpsDec = columnPrecision(tpsVals.filter((v): v is number => v != null), 1);
-  const allIpCols = [...ipCols];
-  const ippDec = FMT.ippPrecision(allIpCols.flat(), 2);
   const ipDecs = ipCols.map(c => FMT.ippPrecision(c, 2));
 
-  lines.push("┌─ Our Scoped Models ───────────────────────────────────────────────────────────────────────────────────────────────────┐");
-  lines.push("│ Model                                        Intel  Coding Agentic  Base$/M    p90TPS  BlndCd  BlndAg  CachCd  CachAg│ ");
-  lines.push("│───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│");
+  // Build the table from a column spec so the header is guaranteed to align
+  // with the data rows. Each column width is at least max(label.length, valueWidth).
+  // The intel/coding/agentic fields previously used a 5-wide value cell, which was
+  // too narrow to hold the "Coding" (6) / "Agentic" (7) labels; widening them to 7
+  // keeps the right-aligned numeric values and right-aligned header labels in sync.
+  const SEP = "  ";
+  const COLS: { label: string; w: number }[] = [
+    { label: "Model",   w: 40 },
+    { label: "Intel",   w: 7  },
+    { label: "Coding",  w: 7  },
+    { label: "Agentic", w: 7  },
+    { label: "Base$/M", w: 10 },
+    { label: "p90TPS",  w: 7  },
+    { label: "BlndCd",  w: 7  },
+    { label: "BlndAg",  w: 7  },
+    { label: "CachCd",  w: 7  },
+    { label: "CachAg",  w: 7  },
+  ];
+  const widths = COLS.map(c => c.w);
+  const inner = widths.reduce((a, b) => a + b, 0) + SEP.length * (COLS.length - 1);
+  // `dash` spans the full inner width including the one-space padding on each
+  // side (│ <dash> │) so the rule line and borders line up with the data rows.
+  const dash = "─".repeat(inner + 2);
+  const titlePrefix = "─ Our Scoped Models ─";
+
+  // Header: left-align the "Model" label (it sits above a left-padded slug) and
+  // right-align every numeric label so its last character sits directly above the
+  // last digit of its (right-aligned) value — fixing the prior 4-space drift.
+  let header = "";
+  for (let i = 0; i < COLS.length; i++) {
+    const c = COLS[i];
+    const label = String(c.label);
+    const rightAlign = c.label !== "Model";
+    const cell =
+      label.length >= c.w
+        ? label.slice(0, c.w)
+        : rightAlign
+          ? " ".repeat(c.w - label.length) + label
+          : label + " ".repeat(c.w - label.length);
+    header += cell;
+    if (i < COLS.length - 1) header += SEP;
+  }
+
+  lines.push(`┌${titlePrefix.padEnd(dash.length, "─")}┐`);
+  lines.push(`│ ${header} │`);
+  lines.push(`│${dash}│`);
   for (const s of scoped) {
-    const name = FMT.pad(s.label, 40);
+    const name = FMT.pad(s.label, 40).slice(0, 40);
     if (!s.entry) {
-      lines.push(`│ ${name}  no data from OpenRouter                                                     │`);
+      const noData = "  no data from OpenRouter";
+      lines.push(`│ ${name} ${noData}${" ".repeat(Math.max(0, inner - name.length - noData.length))} │`);
       continue;
     }
     const e = s.entry;
-    const intel = e.indices.intelligence != null ? e.indices.intelligence.toFixed(1).padStart(5) : "  —  ";
-    const coding = e.indices.coding != null ? e.indices.coding.toFixed(1).padStart(5) : "  —  ";
-    const agentic = e.indices.agentic != null ? e.indices.agentic.toFixed(1).padStart(5) : "  —  ";
+    const intel = e.indices.intelligence != null ? e.indices.intelligence.toFixed(1).padStart(7) : "    —  ";
+    const coding = e.indices.coding != null ? e.indices.coding.toFixed(1).padStart(7) : "    —  ";
+    const agentic = e.indices.agentic != null ? e.indices.agentic.toFixed(1).padStart(7) : "    —  ";
     const blended = FMT.cost(e.pricing.blended, costDec).padStart(10);
     const tps = e.throughput_p90 != null ? e.throughput_p90.toFixed(tpsDec).padStart(7) : "      —";
     const bc = FMT.ipp(e.ipp.blndcod, ipDecs[0]).padStart(7);
     const ba = FMT.ipp(e.ipp.blndagnt, ipDecs[1]).padStart(7);
     const cc = FMT.ipp(e.ipp.cachcod, ipDecs[2]).padStart(7);
     const ca = FMT.ipp(e.ipp.cachagt, ipDecs[3]).padStart(7);
-    lines.push(`│ ${name} ${intel}  ${coding}  ${agentic}  ${blended}  ${tps}  ${bc}  ${ba}  ${cc}  ${ca} │`);
+    const vals = [name, intel, coding, agentic, blended, tps, bc, ba, cc, ca];
+    let row = "";
+    for (let i = 0; i < COLS.length; i++) {
+      row += vals[i];
+      if (i < COLS.length - 1) row += SEP;
+    }
+    lines.push(`│ ${row} │`);
   }
-  lines.push("└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘");
+  lines.push(`└${dash}┘`);
   return lines.join("\n");
 }
 
@@ -599,7 +664,8 @@ export function renderNotable(notable: { category: string; models: { name: strin
   for (const n of notable) {
     lines.push(`│ ${FMT.pad(n.category, 112)} │`);
     for (const m of n.models) {
-      const name = FMT.pad(m.name || "", 40).slice(0, 40);
+      const displayName = DISPLAY_MODEL_NAMES ? (m.name || "") : (m.slug || m.name || "");
+      const name = FMT.pad(displayName, 40).slice(0, 40);
       const v = typeof m.v === "number" ? (m.v > 100 ? m.v.toFixed(1) : m.v.toFixed(2).padStart(6)) : String(m.v ?? "—");
       lines.push(`│   ${name}  ${v}${" ".repeat(Math.max(0, 74 - String(v).length))} │`);
     }
@@ -631,15 +697,58 @@ export function renderTop(entries: ModelEntry[]) {
   const cDec = FMT.ippPrecision(cVals, 2);
   const tpsDec = columnPrecision(tpsVals.filter((v): v is number => v != null), 1);
 
+  // Column spec: width >= max(label.length, valueWidth) so right-aligned labels
+  // line up over right-aligned values. "Rank" (4) and "Intel"/"Coding"/"Agent"
+  // (5/6/7) are wider than the 2-wide rank / 4-wide index fields, so those
+  // fields are widened to fit.
+  const SEP = " ";
+  const COLS: { label: string; w: number }[] = [
+    { label: "Rank",   w: 4  },
+    { label: "Model",  w: 40 },
+    { label: "Intel",  w: 7  },
+    { label: "Coding", w: 7  },
+    { label: "Agent",  w: 7  },
+    { label: "$M/M",   w: 6  },
+    { label: "p90TPS", w: 6  },
+    { label: "BlndCd", w: 6  },
+    { label: "BlndAg", w: 6  },
+    { label: "CachCd", w: 6  },
+    { label: "CachAg", w: 6  },
+    { label: "BlndAv", w: 7  },
+    { label: "CachAv", w: 7  },
+  ];
+  const widths = COLS.map(c => c.w);
+  const inner = widths.reduce((a, b) => a + b, 0) + SEP.length * (COLS.length - 1);
+  const dash = "─".repeat(inner + 2);
+  const titlePrefix = "─ Top 20 by Blended IPP ─";
+
+  // Header: left-align "Rank" & "Model", right-align numeric labels so each
+  // label's last char sits above the last digit of its (right-aligned) value.
+  let header = "";
+  for (let i = 0; i < COLS.length; i++) {
+    const c = COLS[i];
+    const label = String(c.label);
+    const rightAlign = !["Rank", "Model"].includes(c.label);
+    const cell =
+      label.length >= c.w
+        ? label.slice(0, c.w)
+        : rightAlign
+          ? " ".repeat(c.w - label.length) + label
+          : label + " ".repeat(c.w - label.length);
+    header += cell;
+    if (i < COLS.length - 1) header += SEP;
+  }
+
   const lines: string[] = [];
-  lines.push("┌─ Top 20 by Blended IPP ───────────────────────────────────────────────────────────────────────────────────────────────────────────┐");
-  lines.push("│Rank Model                                        Intel Coding Agent  $M/M  p90TPS BlndCd BlndAg CachCd CachAg BlndAv CachAv       │");
+  lines.push(`┌${titlePrefix.padEnd(dash.length, "─")}┐`);
+  lines.push(`│ ${header} │`);
+  lines.push(`│${dash}│`);
   ranked.slice(0, 20).forEach((e, i) => {
-    const rank = (i + 1).toString().padStart(2);
-    const name = FMT.pad(e.name.length > 40 ? e.name.slice(0, 38) + "…" : e.name, 40);
-    const intel = e.indices.intelligence != null ? e.indices.intelligence.toFixed(0).padStart(4) : "  — ";
-    const coding = e.indices.coding != null ? e.indices.coding.toFixed(0).padStart(4) : "  — ";
-    const agentic = e.indices.agentic != null ? e.indices.agentic.toFixed(0).padStart(4) : "  — ";
+    const rank = (i + 1).toString().padStart(4);
+    const name = FMT.pad(modelLabel(e).length > 40 ? modelLabel(e).slice(0, 38) + "…" : modelLabel(e), 40);
+    const intel = e.indices.intelligence != null ? e.indices.intelligence.toFixed(0).padStart(7) : "    —  ";
+    const coding = e.indices.coding != null ? e.indices.coding.toFixed(0).padStart(7) : "    —  ";
+    const agentic = e.indices.agentic != null ? e.indices.agentic.toFixed(0).padStart(7) : "    —  ";
     const blended = FMT.cost(e.pricing.blended, costDec).padStart(6);
     const tps = e.throughput_p90 != null ? e.throughput_p90.toFixed(tpsDec).padStart(6) : "    —";
     const bc = FMT.ipp(e.ipp.blndcod, bcDec).padStart(6);
@@ -648,9 +757,15 @@ export function renderTop(entries: ModelEntry[]) {
     const ca = FMT.ipp(e.ipp.cachagt, caDec).padStart(6);
     const ba_ = FMT.ipp(e.ipp.blnd, bDec).padStart(7);
     const ca_ = FMT.ipp(e.ipp.cach, cDec).padStart(7);
-    lines.push(`│ ${rank} ${name} ${intel} ${coding} ${agentic} ${blended} ${tps} ${bc} ${ba} ${cc} ${ca} ${ba_} ${ca_}  │`);
+    const vals = [rank, name, intel, coding, agentic, blended, tps, bc, ba, cc, ca, ba_, ca_];
+    let row = "";
+    for (let i = 0; i < COLS.length; i++) {
+      row += vals[i];
+      if (i < COLS.length - 1) row += SEP;
+    }
+    lines.push(`│ ${row} │`);
   });
-  lines.push("└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘");
+  lines.push(`└${dash}┘`);
   return lines.join("\n");
 }
 
@@ -687,7 +802,8 @@ export function renderChanges(data: { priorDate: string | null; currentDate: str
       const val = c.metric === "price" 
         ? `${arrow}${Math.abs(c.delta).toFixed(1)}% (${FMT.cost(c.old)} → ${FMT.cost(c.new)})`
         : `${arrow}${Math.abs(c.delta).toFixed(1)}pt (${c.old} → ${c.new})`;
-      lines.push(`│    ${FMT.pad(c.name, 40)} ${val}`);
+      const displayLabel = DISPLAY_MODEL_NAMES ? c.name : c.slug;
+      lines.push(`│    ${FMT.pad(displayLabel, 40)} ${val}`);
     }
     if (data.changes.length > 12) lines.push(`│    … and ${data.changes.length - 12} more`);
   }
@@ -707,21 +823,63 @@ export function renderTPS(entries: ModelEntry[]) {
   const bVals = ranked.map((e) => e.ipp.blnd);
   const bDec = FMT.ippPrecision(bVals, 2);
 
+  // Column spec: width >= max(label.length, valueWidth). "p90 TPS(30m)" (11) and
+  // "Agentic" (7)/"Coding" (6) exceed the value widths, so fields are widened.
+  const SEP = "  ";
+  const COLS: { label: string; w: number }[] = [
+    { label: "Rank",       w: 4  },
+    { label: "Model",      w: 40 },
+    { label: "p90 TPS(30m)", w: 12 },
+    { label: "Base$/M",    w: 7  },
+    { label: "BlndAv",     w: 7  },
+    { label: "Coding",     w: 7  },
+    { label: "Agentic",    w: 7  },
+    { label: "Intel",      w: 5  },
+  ];
+  const widths = COLS.map(c => c.w);
+  const inner = widths.reduce((a, b) => a + b, 0) + SEP.length * (COLS.length - 1);
+  const dash = "─".repeat(inner + 2);
+  const titlePrefix = "─ Top Models by p90 Throughput (tokens/sec) ─";
+  const titlePad = "─".repeat(Math.max(0, dash.length - titlePrefix.length));
+
+  // Header: left-align "Rank" & "Model", right-align numeric labels.
+  let header = "";
+  for (let i = 0; i < COLS.length; i++) {
+    const c = COLS[i];
+    const label = String(c.label);
+    const rightAlign = !["Rank", "Model"].includes(c.label);
+    const cell =
+      label.length >= c.w
+        ? label.slice(0, c.w)
+        : rightAlign
+          ? " ".repeat(c.w - label.length) + label
+          : label + " ".repeat(c.w - label.length);
+    header += cell;
+    if (i < COLS.length - 1) header += SEP;
+  }
+
   const lines: string[] = [];
-  lines.push("┌─ Top Models by p90 Throughput (tokens/sec) ──────────────────────────────────────────────────────┐");
-  lines.push("│Rank Model                                     p90 TPS(30m) Base$/M  BlndAv  Coding  Agentic Intel│");
+  lines.push(`┌${titlePrefix}${titlePad}┐`);
+  lines.push(`│ ${header} │`);
+  lines.push(`│${dash}│`);
   ranked.slice(0, 20).forEach((e, i) => {
     const rank = (i + 1).toString().padStart(2);
-    const name = FMT.pad(e.name.length > 40 ? e.name.slice(0, 38) + "…" : e.name, 40);
+    const name = FMT.pad(modelLabel(e).length > 40 ? modelLabel(e).slice(0, 38) + "…" : modelLabel(e), 40);
     const tps = e.throughput_p90 != null ? e.throughput_p90.toFixed(tpsDec).padStart(7) : "      —";
     const blended = FMT.cost(e.pricing.blended, costDec).padStart(6);
     const ba_ = FMT.ipp(e.ipp.blnd, bDec).padStart(7);
-    const coding = e.indices.coding != null ? e.indices.coding.toFixed(0).padStart(5) : "    —";
-    const agentic = e.indices.agentic != null ? e.indices.agentic.toFixed(0).padStart(5) : "    —";
+    const coding = e.indices.coding != null ? e.indices.coding.toFixed(0).padStart(7) : "    —  ";
+    const agentic = e.indices.agentic != null ? e.indices.agentic.toFixed(0).padStart(7) : "    —  ";
     const intel = e.indices.intelligence != null ? e.indices.intelligence.toFixed(0).padStart(5) : "    —";
-    lines.push(`│ ${rank} ${name} ${tps}  ${blended}  ${ba_}  ${coding}  ${agentic}  ${intel}    │`);
+    const vals = [rank, name, tps, blended, ba_, coding, agentic, intel];
+    let row = "";
+    for (let i = 0; i < COLS.length; i++) {
+      row += vals[i];
+      if (i < COLS.length - 1) row += SEP;
+    }
+    lines.push(`│ ${row} │`);
   });
-  lines.push("└──────────────────────────────────────────────────────────────────────────────────────────────────┘");
+  lines.push(`└${dash}┘`);
   return lines.join("\n");
 }
 
@@ -881,9 +1039,10 @@ export function setupMetrics(pi: ExtensionAPI) {
   // ── Auto-fetch on interactive session start ──
   pi.on("session_start", async (_event, ctx: MetricsCommandCtx): Promise<void> => {
     if (!ctx.hasUI) return; // headless/print/json — skip
+    const useNames = ctx.displayModelNames ?? DISPLAY_MODEL_NAMES;
     activeScopedSlugs = ((ctx as { scopedModels?: { model: { id: string; name?: string } }[] }).scopedModels || []).map((sm) => ({
       slug: sm.model.id,
-      label: sm.model.name || sm.model.id,
+      label: useNames ? (sm.model.name || sm.model.id) : sm.model.id,
     }));
     refresh(ctx);
   });
@@ -904,9 +1063,10 @@ export function setupMetrics(pi: ExtensionAPI) {
 
       // Refresh if stale
       if (!cachedEntries) {
+        const useNames = (ctx as MetricsCommandCtx).displayModelNames ?? DISPLAY_MODEL_NAMES;
         activeScopedSlugs = ((ctx as any).scopedModels || []).map((sm: any) => ({
           slug: sm.model.id,
-          label: sm.model.name || sm.model.id,
+          label: useNames ? (sm.model.name || sm.model.id) : sm.model.id,
         }));
         await refresh(ctx);
       }
@@ -979,7 +1139,7 @@ export function setupMetrics(pi: ExtensionAPI) {
   pi.registerTool({
     name: "or_metrics_query",
     label: "OR Metrics Query",
-    description: "Query OpenRouter ability-per-price metrics for the scoped models or for any tracked model. Use mode='scoped' for our models, mode='top N' for top N by blended IPP, mode='tps' for top models by provider-averaged p90 throughput, mode='find <query>' to search by name, or mode='notable' for analytical highlights. IPP fields: blndcod (BlndCd), blndagnt (BlndAg), cachcod (CachCd), cachagt (CachAg), blnd (BlndAv), cach (CachAv). TPS field: throughput_p90 (provider-averaged p90 tokens/sec over last 30m).",
+    description: "Query OpenRouter ability-per-price metrics for the scoped models or for any tracked model. Use mode='scoped' for our models, mode='top N' for top N by blended IPP, mode='tps' for top models by provider-averaged p90 throughput, mode='find <query>' to search by name, or mode='notable' for analytical highlights. IPP fields: blndcod (BlndCd), blndagnt (BlndAg), cachcod (CachCd), cachagt (CachAg), blnd (BlndAv), cach (CachAv). TPS field: throughput_p90 (provider-averaged p90 tokens/sec over last 30m). Display uses slugs by default (set OR_METRICS_DISPLAY_MODEL_NAMES=1 to show human-readable names).",
     parameters: Type.Object({
       mode: Type.String({ description: "scoped | top N | tps | find <query> | notable" }),
     }),
@@ -1000,7 +1160,7 @@ export function setupMetrics(pi: ExtensionAPI) {
       if (sm && sm.length > 0 && (!activeScopedSlugs || activeScopedSlugs.length === 0)) {
         activeScopedSlugs = sm.map((x: { model: { id: string; name?: string } }) => ({
           slug: x.model.id,
-          label: x.model.name || x.model.id,
+          label: x.model.id, // always use slug as the default label
         }));
       }
 
@@ -1008,23 +1168,28 @@ export function setupMetrics(pi: ExtensionAPI) {
       const result: { n_tracked: number; timestamp: string; scoped?: unknown; rankings?: unknown; matches?: unknown; tps_rankings?: unknown; notable?: unknown; error?: string; note?: string } = { n_tracked: cachedEntries.length, timestamp: new Date().toISOString() };
 
       if (mode === "scoped" || mode.startsWith("scoped")) {
-        result.scoped = cachedScoped!.map((s) => ({
-          label: s.label,
-          slug: s.slug,
-          found: s.found,
-          indices: s.entry?.indices || null,
-          ipp: s.entry?.ipp || null,
-          throughput_p90: cachedTPSData[s.slug] ?? null,
-          pricing: s.entry ? { blended: s.entry.pricing.blended, blended_cached: s.entry.pricing.blendedCached } : null,
-        }));
+        result.scoped = cachedScoped!.map((s) => {
+          const entry = s.entry;
+          return {
+            slug: s.slug,
+            name: entry?.name || s.label,
+            label: DISPLAY_MODEL_NAMES ? (entry?.name || s.label) : s.slug,
+            found: s.found,
+            indices: entry?.indices || null,
+            ipp: entry?.ipp || null,
+            throughput_p90: cachedTPSData[s.slug] ?? null,
+            pricing: entry ? { blended: entry.pricing.blended, blended_cached: entry.pricing.blendedCached } : null,
+          };
+        });
       } else if (mode.startsWith("top")) {
         const n = parseInt(mode.replace("top", "").trim()) || 10;
         const ranked = [...cachedEntries].filter((e) => e.ipp.blnd != null)
           .sort((a, b) => (b.ipp.blnd || 0) - (a.ipp.blnd || 0))
           .slice(0, Math.min(n, 50));
         result.rankings = ranked.map((e) => ({
-          name: e.name,
           slug: e.slug,
+          name: e.name,
+          display: DISPLAY_MODEL_NAMES ? e.name : e.slug,
           indices: e.indices,
           ipp: e.ipp,
           throughput_p90: cachedTPSData[e.slug] ?? null,
@@ -1034,8 +1199,9 @@ export function setupMetrics(pi: ExtensionAPI) {
         const q = mode.replace("find", "").trim().toLowerCase();
         const matches = cachedEntries.filter((e) => e.name.toLowerCase().includes(q) || e.slug.toLowerCase().includes(q));
         result.matches = matches.slice(0, 10).map((e) => ({
-          name: e.name,
           slug: e.slug,
+          name: e.name,
+          display: DISPLAY_MODEL_NAMES ? e.name : e.slug,
           indices: e.indices,
           ipp: e.ipp,
           throughput_p90: cachedTPSData[e.slug] ?? null,
@@ -1049,8 +1215,9 @@ export function setupMetrics(pi: ExtensionAPI) {
           .sort((a, b) => (b._tps || 0) - (a._tps || 0))
           .slice(0, 20);
         result.tps_rankings = ranked.map((e) => ({
-          name: e.name,
           slug: e.slug,
+          name: e.name,
+          display: DISPLAY_MODEL_NAMES ? e.name : e.slug,
           throughput_p90: e._tps,
           blended_cost: e.pricing.blended,
           ipp: e.ipp,

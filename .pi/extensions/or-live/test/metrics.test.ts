@@ -6,6 +6,7 @@ import {
   parsePricing,
   renderTPS,
   renderTop,
+  renderScoped,
 } from "../metrics";
 
 afterEach(() => {
@@ -90,9 +91,9 @@ describe("metrics selection and presentation", () => {
   it("ranks notable models by the requested raw or value metric", () => {
     const notable = findNotable(entries);
     expect(notable[0].category).toContain("Agentic Ability");
-    expect(notable[0].models[0]).toEqual({ name: "Slow", v: 80 });
+    expect(notable[0].models[0]).toEqual({ slug: "acme/slow", name: "Slow", v: 80 });
     expect(notable[2].category).toContain("Blended IPP");
-    expect(notable[2].models[0].name).toBe("Fast");
+    expect(notable[2].models[0]).toEqual({ slug: "acme/fast", name: "Fast", v: expect.any(Number) });
   });
 
   it("renders rankings in descending throughput/IPP order with stable headers", () => {
@@ -101,11 +102,114 @@ describe("metrics selection and presentation", () => {
       throughput_p90: entry.slug.endsWith("fast") ? 90 : 10,
     }));
     const tps = renderTPS(withTPS);
-    expect(tps.indexOf("Fast")).toBeLessThan(tps.indexOf("Slow"));
+    // Slugs are shown by default (acme/fast before acme/slow)
+    expect(tps.indexOf("acme/fast")).toBeLessThan(tps.indexOf("acme/slow"));
     expect(tps).toContain("p90 TPS(30m)");
 
     const top = renderTop(entries);
-    expect(top.indexOf("Fast")).toBeLessThan(top.indexOf("Slow"));
+    expect(top.indexOf("acme/fast")).toBeLessThan(top.indexOf("acme/slow"));
     expect(top).toContain("BlndAv");
+  });
+
+  it("aligns the scoped-models table header precisely over its data columns", () => {
+    const scoped = findScoped(entries, [
+      { slug: "acme/slow", label: "deepseek/deepseek-v4-flash-0731" },
+    ]);
+    const scopedWithData = scoped.map((s) => ({
+      ...s,
+      entry: s.entry
+        ? {
+            ...s.entry,
+            pricing: { blended: 0.072 },
+            throughput_p90: 106.83,
+            ipp: {
+              blndcod: 959.72,
+              blndagnt: 672.22,
+              cachcod: 1531.47,
+              cachagt: 1072.70,
+              blnd: 800,
+              cach: 900,
+            },
+            indices: { intelligence: 51.8, coding: 69.1, agentic: 48.4 },
+          }
+        : s.entry,
+    }));
+    const out = renderScoped(scopedWithData);
+    const lines = out.split("\n");
+    const header = lines[1];
+    const row = lines[3];
+
+    // "Model" is left-aligned: the label start sits above the value start.
+    expect(header.indexOf("Model")).toBe(row.indexOf("deepseek/deepseek-v4-flash-0731"));
+
+    // Every numeric column is right-aligned: the last character of each header
+    // label must sit in the same column as the last digit of its value.
+    const numericPairs: [string, string][] = [
+      ["Intel", "51.8"],
+      ["Coding", "69.1"],
+      ["Agentic", "48.4"],
+      ["Base$/M", "$0.0720"],
+      ["p90TPS", "106.8"],  // tpsDec is derived from the value precision
+      ["BlndCd", "959.72"],
+      ["BlndAg", "672.22"],
+      ["CachCd", "1531.47"],
+      ["CachAg", "1072.70"],
+    ];
+    for (const [label, value] of numericPairs) {
+      const labelEnd = header.lastIndexOf(label) + label.length;
+      const valueEnd = row.indexOf(value) + value.length;
+      expect(labelEnd).toBe(valueEnd);
+    }
+
+    // The whole table must remain within a single, consistent inner width.
+    const topBorder = lines[0];
+    const bottomBorder = lines[lines.length - 1];
+    expect(topBorder.length).toBe(bottomBorder.length);
+    expect(out.split("\n").every((l) => l.length === topBorder.length)).toBe(true);
+  });
+
+  it("aligns right-aligned header labels over their values in renderTop and renderTPS", () => {
+    const entries = analyzeModels([
+      { id: "acme/slow", name: "Slow", pricing: { prompt: "0.01", completion: "0.01" }, benchmarks: { artificial_analysis: { coding_index: 80, agentic_index: 80 } } },
+    ]);
+    const data = entries.map((e) => ({
+      ...e,
+      pricing: { blended: 0.072 },
+      throughput_p90: 106.83,
+      ipp: { blndcod: 959.72, blndagnt: 672.22, cachcod: 1531.47, cachagt: 1072.70, blnd: 800, cach: 900 },
+      indices: { intelligence: 52, coding: 69, agentic: 48 },
+    }));
+
+    // renderTop: integer indices (toFixed(0)), right-aligned labels.
+    const top = renderTop(data);
+    let lines = top.split("\n");
+    let header = lines[1], row = lines[3];
+    const topPairs: [string, string][] = [
+      ["Intel", "52"], ["Coding", "69"], ["Agent", "48"],
+      ["$M/M", "$0.0720"], ["p90TPS", "106.8"],
+      ["BlndCd", "959.72"], ["BlndCd", "959.72"], ["BlndAv", "800.00"], ["CachAv", "900.00"],
+    ];
+    const seen = new Set<string>();
+    for (const [label, value] of topPairs) {
+      const key = label + "|" + value;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      expect(header.lastIndexOf(label) + label.length).toBe(row.indexOf(value) + value.length);
+    }
+    // Rank is left-aligned over the rank number.
+    expect(header.indexOf("Rank")).toBe(row.indexOf("1") - 2);
+
+    // renderTPS: right-aligned labels over values
+    const tps = renderTPS(data);
+    lines = tps.split("\n");
+    header = lines[1];
+    row = lines[3];
+    const tpsPairs: [string, string][] = [
+      ["Base$/M", "$0.0720"], ["BlndAv", "800.00"], ["Coding", "69"],
+      ["Agentic", "48"], ["Intel", "52"], ["p90 TPS(30m)", "106.8"],
+    ];
+    for (const [label, value] of tpsPairs) {
+      expect(header.lastIndexOf(label) + label.length).toBe(row.indexOf(value) + value.length);
+    }
   });
 });
