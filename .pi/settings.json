@@ -36,8 +36,7 @@
     "npm:pi-web-access",
     "npm:pi-subagents",
     "git:github.com/nirguk/pi-session-analyzer",
-    "git:github.com/nirguk/pi-llm-debugging",
-    "npm:@xamfoo/pi-openrouter-pin"
+    "git:github.com/nirguk/pi-llm-debugging"
   ],
   "skills": [
     "s",
