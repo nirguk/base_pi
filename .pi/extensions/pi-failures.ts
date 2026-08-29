@@ -10,12 +10,19 @@
  * and testable outside pi.
  *
  * Usage:
- *   /failures                        # summary + per-slug table
- *   /failures --by session           # grouped per session
+ *   /failures                        # summary + per-upstream-provider table (default)
+ *   /failures --clear                # dismiss/clear the report widget
+ *   /failures --by provider|slug|session|day|category
  *   /failures --since 3              # only failures in the last 3 days
  *   /failures --session 01a04da1     # failures from one session (prefix)
  *   /failures --json                 # machine-readable output
  *   /failures --detail --limit 30    # full entry rows, capped
+ *
+ * Provider lens: the default view breaks failures down by the OpenRouter
+ * upstream provider that actually served them (baidu, digitalocean,
+ * novita, deepinfra, ...), parsed from the JSON error body embedded in
+ * provider-error messages and falling back to the pinned route.
+ * `--by slug` restores the per-model view.
  *
  * Requirements: node (bundled with pi).
  *
@@ -71,10 +78,11 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("failures", {
     description:
       "Analyze failed turns across past pi sessions (deterministic script). " +
-      "Flags: --by slug|session|day|category, --since DAYS, --session PREFIX, " +
-      "--kind all|assistant|tool, --json, --detail, --limit N, --top N.",
+      "Flags: --clear, --by provider|slug|session|day|category, --since DAYS, " +
+      "--session PREFIX, --kind all|assistant|tool, --json, --detail, " +
+      "--limit N, --top N.",
     getArgumentCompletions: (prefix: string) => {
-      const flags = ["--by", "--since", "--session", "--kind", "--json", "--detail", "--limit", "--top"];
+      const flags = ["--clear", "--by", "--since", "--session", "--kind", "--json", "--detail", "--limit", "--top"];
       const items = flags
         .filter((f) => f.startsWith(prefix))
         .map((f) => ({ value: f, label: f }));
@@ -82,6 +90,18 @@ export default function (pi: ExtensionAPI) {
     },
     handler: async (args: string, ctx) => {
       const argv = args.trim().split(/\s+/).filter(Boolean);
+
+      // `--clear` is a pure UI action: dismiss the report widget without
+      // running the analysis. Handled here so it works even when the
+      // script is missing/unrunnable.
+      if (argv.includes("--clear")) {
+        if (ctx.mode === "tui") {
+          ctx.ui.setWidget("failures", undefined);
+        }
+        ctx.ui.notify("failures: report cleared", "info");
+        return;
+      }
+
       let out = "";
       ctx.ui.setStatus("failures", "analyzing...");
       try {

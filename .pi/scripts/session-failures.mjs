@@ -14,11 +14,21 @@
  *
  * Usage (invoked from pi via /failures, or directly):
  *   node session-failures.mjs [--dir <PATH>] [--since <DAYS>]
- *       [--session <ID>] [--by slug|session|day|category] [--kind all|assistant|tool]
+ *       [--session <ID>] [--by provider|slug|session|day|category] [--kind all|assistant|tool]
  *       [--json] [--detail] [--limit <N>] [--top <N>]
  *
+ * Provider lens (the default): each failure is attributed to the OpenRouter
+ *   upstream provider that actually served it (e.g. baidu, digitalocean,
+ *   novita, deepinfra, z.ai) — parsed from the `provider_name` embedded
+ *   in the JSON error body within provider-error messages (handles the
+ *   `provider_name":"Value"` JSON format that a simple regex cannot).
+ *   Falls back to the pinned route (`openrouter-baidu` → `baidu`), then
+ *   the parent model chain, then "unknown". The old per-model slug
+ *   grouping stays available via `--by slug`.
+ *
  * Examples:
- *   /failures                          # summary + per-slug table
+ *   /failures                          # summary + per-provider table (default)
+ *   /failures --by provider            # same lens, explicit
  *   /failures --by session             # grouped per session
  *   /failures --since 3                # only last 3 days
  *   /failures --session 01a04da1       # one session (prefix match)
@@ -44,7 +54,7 @@ function hasFlag(name) {
 const DIR = flag("--dir", join(homedir(), ".pi", "agent", "sessions"));
 const SINCE_DAYS = Number(flag("--since", "0")) || 0;
 const SESSION_PREFIX = flag("--session", "");
-const BY = flag("--by", "slug");
+const BY = flag("--by", "provider");
 const KIND = flag("--kind", "all"); // all | assistant | tool
 const LIMIT = Number(flag("--limit", "0")) || 0;
 const TOP = Number(flag("--top", "0")) || 0;
@@ -55,8 +65,8 @@ if (!["all", "assistant", "tool"].includes(KIND)) {
   console.error(`Unknown --kind '${KIND}' (expected all|assistant|tool)`);
   process.exit(2);
 }
-if (!["slug", "session", "day", "category"].includes(BY)) {
-  console.error(`Unknown --by '${BY}' (expected slug|session|day|category)`);
+if (!["provider", "slug", "session", "day", "category"].includes(BY)) {
+  console.error(`Unknown --by '${BY}' (expected provider|slug|session|day|category)`);
   process.exit(2);
 }
 
@@ -98,6 +108,64 @@ function shortDesc(text, max = 110) {
     .slice(0, max);
 }
 
+/**
+ * Extract the OpenRouter upstream provider name from a provider-side
+ * error message. OpenRouter embeds the upstream attribution inside a JSON
+ * object within the error text, e.g.:
+ *   429: {"message":"Provider returned error","metadata":{"provider_name":"Baidu",...}}
+ *
+ * The regex-based approach used previously failed on the JSON format
+ * `provider_name":"Value"` (no space before the colon, quote before the
+ * colon) which is the format produced by OpenRouter's error payloads.
+ *
+ * This function extracts the embedded JSON object and walks it to find
+ * `provider_name` at any depth (metadata.provider_name,
+ * previous_errors[*].provider_name, …). Returns null when no attribution
+ * is available (transport aborts, timeouts, tool errors, …).
+ */
+function extractProviderFromError(text) {
+  const s = String(text ?? "");
+  // Try to locate the JSON object embedded in the error message.
+  const jsonMatch = s.match(/(\{.*\})/s);
+  if (!jsonMatch) return null;
+  let obj;
+  try {
+    obj = JSON.parse(jsonMatch[1]);
+  } catch {
+    return null;
+  }
+  // Walk the parsed object (and one level into arrays) for provider_name.
+  const candidates = [
+    obj?.metadata?.provider_name,
+    obj?.provider_name,
+  ];
+  for (const prev of obj?.metadata?.previous_errors ?? []) {
+    candidates.push(prev?.provider_name);
+  }
+  for (const c of candidates) {
+    if (typeof c === "string" && c.length > 0) return c;
+  }
+  return null;
+}
+
+/**
+ * Normalize a provider name for the provider lens: strip the OpenRouter
+ * routing prefix (`openrouter-baidu` → `baidu`) and lowercase so that
+ * `provider_name:"DigitalOcean"` and route `openrouter-digitalocean`
+ * group together.
+ *
+ * Plain `"openrouter"` (the router itself, not an upstream provider)
+ * returns `"unknown"` — the router is not a low-level provider and
+ * showing it as the provider would be misleading.
+ */
+function normalizeProvider(p) {
+  if (!p) return "unknown";
+  const s = String(p).trim().toLowerCase();
+  if (!s) return "unknown";
+  const stripped = s.replace(/^openrouter[-_]/i, "");
+  return stripped || "unknown";
+}
+
 for (const dir of sessionDirs) {
   for (const file of readdirSync(dir).filter((f) => f.endsWith(".jsonl"))) {
     const fullPath = join(dir, file);
@@ -137,6 +205,17 @@ for (const dir of sessionDirs) {
       }
       return "?";
     };
+    // Resolve the provider for an entry by walking up its parent chain
+    // (tool results don't carry provider/model themselves).
+    const providerOf = (e) => {
+      let cur = e;
+      for (let n = 0; n < 40 && cur; n++) {
+        if (cur?.type === "message" && cur.message?.provider)
+          return normalizeProvider(cur.message.provider);
+        cur = getEntry(cur);
+      }
+      return "unknown";
+    };
 
     for (const e of entries) {
       if (e?.type !== "message" || !e.message) continue;
@@ -148,10 +227,15 @@ for (const dir of sessionDirs) {
       if (m.role === "assistant") {
         const err = m.errorMessage;
         if (err) {
+          const upstream = extractProviderFromError(err);
           rows.push({
             ts,
             kind: "assistant",
             slug: `${m.provider ?? "?"}/${m.model ?? "?"}`,
+            provider:
+              (upstream ? normalizeProvider(upstream) : null) ??
+              (m.provider ? normalizeProvider(m.provider) : null) ??
+              providerOf(e),
             sessionId,
             category: categoryOf(err, m.stopReason),
             stop: m.stopReason ?? m.rawStopReason ?? "?",
@@ -168,6 +252,7 @@ for (const dir of sessionDirs) {
             ts,
             kind: "tool",
             slug: modelOf(e),
+            provider: providerOf(e),
             sessionId,
             category: "tool-error",
             stop: m.toolName ?? "?",
@@ -227,7 +312,8 @@ function table(rowsIn) {
 const groups = {};
 for (const r of filtered) {
   const key =
-    BY === "session" ? r.sessionId
+    BY === "provider" ? r.provider
+    : BY === "session" ? r.sessionId
     : BY === "day" ? r.ts.slice(0, 10)
     : BY === "category" ? r.category
     : r.slug;
