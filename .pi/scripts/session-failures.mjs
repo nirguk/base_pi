@@ -15,7 +15,7 @@
  * Usage (invoked from pi via /failures, or directly):
  *   node session-failures.mjs [--dir <PATH>] [--since <DAYS>]
  *       [--session <ID>] [--by provider|slug|session|day|category] [--kind all|assistant|tool]
- *       [--json] [--detail] [--limit <N>] [--top <N>]
+ *       [--slug <MODEL-SLUG>] [--json] [--detail] [--limit <N>] [--top <N>]
  *       [--secondary provider|slug|session|day|category]
  *
  * The default view is a primary × secondary cross-tab: `/failures`
@@ -74,6 +74,7 @@ const SESSION_PREFIX = flag("--session", "");
 const BY = flag("--by", "provider");
 const SECONDARY = flag("--secondary", "category"); // default: crosstab error reasons under the primary grouping
 const KIND = flag("--kind", "all"); // all | assistant | tool
+const SLUG_FILTER = flag("--slug", "");
 const LIMIT = Number(flag("--limit", "0")) || 0;
 const TOP = Number(flag("--top", "0")) || 0;
 const WANT_JSON = hasFlag("--json");
@@ -103,6 +104,10 @@ if (!DIMENSIONS.includes(BY)) {
 }
 if (SECONDARY && !DIMENSIONS.includes(SECONDARY)) {
   console.error(`Unknown --secondary '${SECONDARY}' (expected ${DIMENSIONS.join("|")})`);
+  process.exit(2);
+}
+if (SLUG_FILTER && BY !== "slug") {
+  console.error("--slug can only be used with --by slug");
   process.exit(2);
 }
 
@@ -260,6 +265,12 @@ for (const dir of sessionDirs) {
       if (cutoffTs && (!tsMs || tsMs < cutoffTs)) continue;
       const ts = (e.timestamp || "").slice(0, 19);
 
+      // Compute the slug early so we can filter on it and reuse it.
+      const rowSlug =
+        m.role === "assistant"
+          ? `${m.provider ?? "?"}/${m.model ?? "?"}`
+          : modelOf(e);
+
       if (m.role === "assistant") {
         const err = m.errorMessage;
         if (err) {
@@ -267,7 +278,7 @@ for (const dir of sessionDirs) {
           rows.push({
             ts,
             kind: "assistant",
-            slug: `${m.provider ?? "?"}/${m.model ?? "?"}`,
+            slug: rowSlug,
             provider:
               (upstream ? normalizeProvider(upstream) : null) ??
               (m.provider ? normalizeProvider(m.provider) : null) ??
@@ -287,7 +298,7 @@ for (const dir of sessionDirs) {
           rows.push({
             ts,
             kind: "tool",
-            slug: modelOf(e),
+            slug: rowSlug,
             provider: providerOf(e),
             sessionId,
             category: "tool-error",
@@ -306,9 +317,20 @@ rows.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.sessionId < b.sessio
 // Kind filter
 let filtered = KIND === "all" ? rows : rows.filter((r) => r.kind === KIND);
 
+// Slug filter (only applies when --by slug is active)
+if (SLUG_FILTER) {
+  filtered = filtered.filter((r) => r.slug === SLUG_FILTER);
+}
+
 // ─── Output ──────────────────────────────────────────────────────────────────
 function pad(s, n) {
   return String(s).padEnd(n);
+}
+
+const RED = "\x1b[31m";
+const RESET = "\x1b[0m";
+function redWrap(text) {
+  return `${RED}${text}${RESET}`;
 }
 
 function table(rowsIn) {
@@ -402,28 +424,47 @@ if (WANT_JSON) {
   const topKeys = TOP > 0 ? keys.slice(0, TOP) : keys;
 
   if (hasCross && !WANT_DETAIL) {
-    // Cross-tab summary: primary × secondary counts
+    // Cross-tab summary: primary × secondary counts with % of total in brackets;
+    // the row total column stays as a raw number ("apart from the total field itself").
     const secKeys = allSecondaryKeys(crossTabs, keys);
     const labelW = Math.max(byDim.length, ...keys.map((k) => String(k).length));
-    const headerLine = pad(byDim, labelW) + secKeys.map((s) => `  ${pad(String(s), 11)}`).join("") + "  total";
+    const totalFailures = filtered.length;
+    // Pre-compute formatted cell strings and determine column width.
+    let cellW = 3;
+    const cellFmt = {}; // key -> secKey -> { str, pct }
+    for (const key of keys) {
+      cellFmt[key] = {};
+      const counts = crossTabs[key];
+      for (const s of secKeys) {
+        const v = counts[s] || 0;
+        const pct = totalFailures > 0 ? Math.round((100 * v) / totalFailures) : 0;
+        const str = `${v} (${pct}%)`;
+        cellFmt[key][s] = { str, pct };
+        cellW = Math.max(cellW, str.length);
+      }
+    }
+    cellW = Math.max(cellW, ...secKeys.map((s) => s.length));
+    const headerLine = pad(byDim, labelW) + secKeys.map((s) => `  ${pad(String(s), cellW)}`).join("") + "  total";
     out.push(headerLine);
     out.push("-".repeat(headerLine.length));
     for (const key of topKeys) {
-      const counts = crossTabs[key];
       const total = groups[key].length;
       const cells = secKeys.map((s) => {
-        const v = counts[s] || 0;
-        return `  ${pad(String(v), 11)}`;
+        const { str, pct } = cellFmt[key][s] || { str: "0 (0%)", pct: 0 };
+        const padded = pad(str, cellW);
+        return `  ${pct > 10 ? redWrap(padded) : padded}`;
       }).join("");
       out.push(`${pad(key, labelW)}${cells}  ${total}`);
     }
     out.push("");
   } else {
     // Single-dimension summary table
+    const countW = Math.max(...topKeys.map((k) => String(groups[k].length).length), 1);
     for (const key of topKeys) {
       const g = groups[key];
       const pct = remaining > 0 ? Math.round((100 * g.length) / filtered.length) : 0;
-      out.push(`${pad(g.length, 5)} (${pad(pct + "%", 4)})  ${key}`);
+      const countPart = `${pad(g.length, countW)} (${pad(pct + "%", 4)})`;
+      out.push(`${pct > 10 ? redWrap(countPart) : countPart}  ${key}`);
       remaining -= g.length;
     }
     out.push("");
