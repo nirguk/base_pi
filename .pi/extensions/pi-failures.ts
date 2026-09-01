@@ -1,50 +1,23 @@
 /**
  * pi-failures — deterministic failed-turn analysis for past pi sessions.
  *
- * Registers `/failures` (user command) and `session_failures` (LLM tool? no —
- * command only, deterministic by delegating to the standalone script).
- *
- * The actual analysis lives in .pi/scripts/session-failures.mjs (zero deps,
- * no network). This extension is a thin wrapper: it spawns the script and
- * relays stdout to the terminal. This keeps the analysis fully deterministic
- * and testable outside pi.
+ * Registers `/failures` (user command). The actual analysis lives in
+ * .pi/scripts/session-failures.mjs (zero deps, no network). This
+ * extension is a thin wrapper: it spawns the script and relays stdout
+ * to the terminal.
  *
  * Usage:
- *   /failures                        # per-model breakdown (default, --by slug)
- *   /failures --clear                # dismiss/clear the report widget
- *   /failures --by provider|slug|session|day|category
- *   /failures --secondary provider|slug|session|day|category  # secondary crosstab dim
+ *   /failures                        # per-model summary (default)
+ *   /failures --clear                # dismiss the report widget
  *   /failures --since 7              # only failures in the last 7 days (default)
  *   /failures --since 3              # only failures in the last 3 days
- *   /failures --session 01a04da1     # failures from one session (prefix)
- *   /failures --json                 # machine-readable output
- *   /failures --detail --limit 30    # full entry rows, capped
+ *   /failures --slug MODEL-SLUG      # drill-down: failure types + providers
  *
  * Keyboard shortcuts when the failures widget is visible:
- *   Ctrl+Shift+]   cycle to the next model slug
- *   Ctrl+Shift+[   cycle to the previous model slug
- *
- * The cycling goes through the actual model slugs that appear in the
- * failure data (e.g. "anthropic/claude-3-opus", "openai/gpt-4o"),
- * not through abstract dimension modes.
- *
- * Provider lens (--by provider): the primary grouping breaks failures
- * down by the OpenRouter upstream provider that actually served them
- * (baidu, digitalocean, novita, deepinfra, ...), parsed from the JSON
- * error body embedded in provider-error messages and falling back to
- * the pinned route.  `--by slug` restores the per-model view.
- *
- * Cross-tabulation (`--secondary`): defaults to `--secondary category`,
- * so `/failures` shows providers as rows with error-type breakouts
- * (429, aborted, terminated/conn-error, …).  Pick another secondary
- * dim, or pass `--by category --secondary provider` to invert it.  A
- * secondary equal to the primary collapses back to a single-dimension
- * summary.  Ignored under `--json` (use `--json` for full per-row
- * fields).
+ *   Ctrl+Shift+]   cycle to the next model slug (summary view only)
+ *   Ctrl+Shift+[   cycle to the previous model slug (summary view only)
  *
  * Requirements: node (bundled with pi).
- *
- * @version 3.0.0
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, Key, Text, type Theme, type TUI } from "@earendil-works/pi-tui";
@@ -53,8 +26,6 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// The script lives next to this extension (extension in .pi/extensions/,
-// script in .pi/extensions/scripts/, or script in .pi/scripts/).
 const here = fileURLToPath(new URL(".", import.meta.url));
 const candidates = [
   resolve(here, "..", "scripts", "session-failures.mjs"),
@@ -82,9 +53,7 @@ function spawnScript(args: string[], onData: (chunk: string) => void) {
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (d: string) => onData(d));
     let errBuf = "";
-    child.stderr.on("data", (d: string) => {
-      errBuf += d;
-    });
+    child.stderr.on("data", (d: string) => { errBuf += d; });
     child.on("error", reject);
     child.on("close", (code) => {
       if (code !== 0 && errBuf) onData(`\n[stderr] ${errBuf.trim()}\n`);
@@ -93,37 +62,33 @@ function spawnScript(args: string[], onData: (chunk: string) => void) {
   });
 }
 
-// ─── Slug-based cycling state ──────────────────────────────────────
+// ─── Slug cycling state ────────────────────────────────────
 
-/** Current raw args (without --by / --slug) so we can re-run with a different slug. */
+/** Current args (without --slug) so we can re-run with a different slug. */
 let currentArgs: string[] = [];
 /** Whether the failures widget is currently visible in the TUI. */
 let widgetVisible = false;
 /** Whether we've already notified the user about keyboard shortcuts. */
 let widgetNotified = false;
-/** Ordered list of unique model slugs extracted from the last output. */
+/** Ordered list of unique model slugs extracted from the last summary output. */
 let availableSlugs: string[] = [];
 /** Current position in the availableSlugs list. */
 let currentSlugIndex = 0;
+/** Whether the current view is a breakdown (slug drill-down) — cycling disabled. */
+let isBreakdown = false;
 
 /**
- * Extract unique model slugs from the failures widget output.
- * Parses lines that look like slug entries in the summary table
- * (lines with a leading count like "   5 (12%)  anthropic/claude-3-opus").
- * Returns the list of slugs in display order.
+ * Extract unique model slugs from the summary table output.
+ * Parses lines like "   18  18/42 (43%)  openrouter/upstage/solar-pro4".
  */
 function extractSlugsFromOutput(output: string): string[] {
   const slugs = new Set<string>();
   for (const line of output.split("\n")) {
-    // Strip ANSI color codes before matching so that red-highlighted
-    // count/pct cells don't break the slug extraction regex.
     const clean = line.replace(/\x1b\[[0-9;]*m/g, "");
-    // Match summary lines: "<count> (<pct>%)  <slug>"  or  "<count>  <slug>"
-    const m = clean.match(/^\s*\d+\s*(?:\(\d+%\))?\s+(.+)$/);
+    const m = clean.match(/^\s*\d+\s+\S+\s+\(.+%\)\s+(.+)$/);
     if (m) {
       const candidate = m[1].trim();
-      // Skip header/dimension labels and section dividers.
-      if (candidate && !candidate.startsWith("──") && candidate !== "provider" && candidate !== "slug" && candidate !== "session" && candidate !== "day" && candidate !== "category") {
+      if (candidate && !candidate.startsWith("──") && !["provider", "slug", "session", "day", "category"].includes(candidate)) {
         slugs.add(candidate);
       }
     }
@@ -131,34 +96,27 @@ function extractSlugsFromOutput(output: string): string[] {
   return [...slugs];
 }
 
-/**
- * Build the arg array for a re-run filtered to a specific slug.
- * Replaces any existing `--slug <slug>` in currentArgs, or appends
- * `--by slug --slug <slug>` if --by slug is not already present.
- */
+async function resolveSlugCompletions(prefix: string): Promise<string[]> {
+  if (availableSlugs.length === 0) return [];
+  if (prefix) {
+    const lower = prefix.toLowerCase();
+    return availableSlugs.filter((s) => s.toLowerCase().includes(lower));
+  }
+  return availableSlugs;
+}
+
+/** Build args for a re-run with a different slug, preserving --since. */
 function argsWithSlug(slug: string): string[] {
   const out = [...currentArgs];
-  // Remove any existing --slug and its value.
   const sidx = out.indexOf("--slug");
-  if (sidx !== -1) {
-    out.splice(sidx, 2);
-  }
-  // Ensure --by slug is present.
-  const byIdx = out.indexOf("--by");
-  if (byIdx !== -1) {
-    // Replace the existing --by value with "slug".
-    out.splice(byIdx, 2, "--by", "slug");
-  } else {
-    out.push("--by", "slug");
-  }
+  if (sidx !== -1) out.splice(sidx, 2);
   out.push("--slug", slug);
   return out;
 }
 
 /**
  * Create a widget component that renders all lines without truncation.
- * pi's default string-array widget caps at MAX_WIDGET_LINES=10; using a
- * component factory bypasses that limit so the full output is visible.
+ * pi's default string-array widget caps at MAX_WIDGET_LINES=10.
  */
 function failuresWidget(lines: string[]) {
   return (_tui: TUI, theme: Theme) => {
@@ -189,9 +147,7 @@ async function runAndDisplay(
   let out = "";
   ctx.ui.setStatus("failures", "analyzing...");
   try {
-    await spawnScript(args, (chunk) => {
-      out += chunk;
-    });
+    await spawnScript(args, (chunk) => { out += chunk; });
   } catch (err) {
     ctx.ui.setStatus("failures", undefined);
     throw err;
@@ -207,15 +163,13 @@ async function runAndDisplay(
   if (ctx.mode === "tui") {
     ctx.ui.setWidget("failures", failuresWidget(lines));
     widgetVisible = true;
-    // Extract slugs from the output for cycling.
-    availableSlugs = extractSlugsFromOutput(trimmed);
+    isBreakdown = trimmed.includes("breakdown for");
+    // Extract slugs from summary output for cycling.
+    availableSlugs = trimmed.includes("grouped by slug") ? extractSlugsFromOutput(trimmed) : [];
     currentSlugIndex = availableSlugs.length > 0 ? 0 : -1;
-    if (!widgetNotified && availableSlugs.length > 0) {
+    if (!widgetNotified && availableSlugs.length > 0 && !isBreakdown) {
       ctx.ui.notify(`failures: Ctrl+Shift+] / Ctrl+Shift+[ to cycle ${availableSlugs.length} model slug(s)`, "info");
       widgetNotified = true;
-    }
-    if (lines.length > 10) {
-      ctx.ui.notify("failures: widget shows all rows; use --detail for full per-row output", "info");
     }
   } else {
     ctx.ui.notify(lines.slice(0, 40).join("\n"), "info");
@@ -226,66 +180,99 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("failures", {
     description:
       "Analyze failed turns across past pi sessions (deterministic script). " +
-      "Flags: --clear, --by provider|slug|session|day|category, " +
-      "--secondary provider|slug|session|day|category, --since DAYS (default 7), " +
-      "--session PREFIX, --kind all|assistant|tool, --slug MODEL-SLUG, " +
-      "--json, --detail, --limit N, --top N. " +
-      "When the widget is visible, use Ctrl+Shift+] / Ctrl+Shift+[ to cycle model slugs.",
-    getArgumentCompletions: (prefix: string) => {
-      const flags = ["--clear", "--by", "--secondary", "--since", "--session", "--kind", "--slug", "--json", "--detail", "--limit", "--top"];
-      const items = flags
-        .filter((f) => f.startsWith(prefix))
-        .map((f) => ({ value: f, label: f }));
-      return items.length > 0 ? items : null;
+      "Flags: --slug MODEL-SLUG (drill-down), --since DAYS (default 7), --clear. " +
+      "Default view shows per-model failure rates. " +
+      "Use --slug to see failure types and upstream providers for a specific model. " +
+      "When the widget is visible, use Ctrl+Shift+] / Ctrl+Shift+[ to cycle slugs (summary view only).",
+    getArgumentCompletions: async (prefix: string) => {
+      const flags = ["--clear", "--since", "--slug"];
+      const valueFlags = new Set(["--since", "--slug"]);
+      const commonNumbers = ["1", "3", "7", "14", "30"];
+
+      const tokens = prefix.trim().split(/\s+/).filter(Boolean);
+      const hasTrailingSpace = prefix.endsWith(" ");
+      const activeToken = hasTrailingSpace ? "" : (tokens[tokens.length - 1] ?? "");
+      const baseTokens = hasTrailingSpace ? tokens : tokens.slice(0, -1);
+      const rebuild = (completed: string) => [...baseTokens, completed].join(" ");
+
+      // Case 1: active token is a flag (or empty → starting a new flag)
+      if (activeToken.startsWith("--")) {
+        const matches = flags.filter((f) => f.startsWith(activeToken));
+        if (matches.length === 0) return null;
+        return matches.map((f) => ({
+          value: rebuild(f),
+          label: f,
+          description: valueFlags.has(f) ? "flag (takes a value)" : "flag",
+        }));
+      }
+
+      // Case 2: previous token is a value-taking flag
+      const prevToken = baseTokens.length > 0 ? baseTokens[baseTokens.length - 1] : null;
+
+      if (prevToken === "--slug") {
+        const slugs = await resolveSlugCompletions(activeToken);
+        if (slugs.length === 0) return null;
+        return slugs.map((s) => ({ value: rebuild(s), label: s, description: "model slug" }));
+      }
+
+      if (prevToken === "--since") {
+        const matches = commonNumbers.filter((n) => n.startsWith(activeToken));
+        if (matches.length === 0) return null;
+        return matches.map((n) => ({
+          value: rebuild(n),
+          label: n,
+          description: "days",
+        }));
+      }
+
+      return null;
     },
     handler: async (args: string, ctx) => {
       const argv = args.trim().split(/\s+/).filter(Boolean);
 
-      // `--clear` is a pure UI action: dismiss the report widget without
-      // running the analysis. Handled here so it works even when the
-      // script is missing/unrunnable.
+      // `--clear` is a pure UI action: dismiss the report widget.
       if (argv.includes("--clear")) {
         if (ctx.mode === "tui") {
           ctx.ui.setWidget("failures", undefined);
           widgetVisible = false;
+          isBreakdown = false;
         }
         ctx.ui.notify("failures: report cleared", "info");
         return;
       }
 
-      // Track the current args (without --by or --slug) so shortcuts can
-      // re-run with a different slug while preserving all other flags.
-      const byIdx = argv.indexOf("--by");
-      if (byIdx !== -1 && byIdx + 1 < argv.length) {
-        // Remove --by <dim> from stored args; we'll re-add --by slug
-        // when cycling slugs.
-        currentArgs = [...argv];
-        currentArgs.splice(byIdx, 2);
-      } else {
-        currentArgs = [...argv];
-      }
-      // Remove any existing --slug from stored args so we can re-add it.
-      const slugIdx = currentArgs.indexOf("--slug");
-      if (slugIdx !== -1 && slugIdx + 1 < currentArgs.length) {
-        currentArgs.splice(slugIdx, 2);
-      }
+      // Extract --slug and --since from args, store the rest for cycling.
+      const slugIdx = argv.indexOf("--slug");
+      const userSlug = slugIdx !== -1 && slugIdx + 1 < argv.length ? argv[slugIdx + 1] : undefined;
+
+      // Store current args without --slug for cycling.
+      currentArgs = [...argv];
+      if (slugIdx !== -1) currentArgs.splice(slugIdx, 2);
 
       // Ensure --since defaults to 7 when not provided.
       if (!argv.includes("--since")) {
         currentArgs.push("--since", "7");
       }
 
-      await runAndDisplay(pi, [...currentArgs, "--by", "slug"], ctx);
+      const runArgs = [...currentArgs];
+      if (userSlug) {
+        runArgs.push("--slug", userSlug);
+      }
+      await runAndDisplay(pi, runArgs, ctx);
     },
   });
 
   // ── Keyboard shortcuts for cycling model slugs ──
 
   pi.registerShortcut(Key.ctrlShift("]"), {
-    description: "Cycle failures to the next model slug (forward)",
+    description: "Cycle failures to the next model slug (summary view only)",
     handler: async (ctx) => {
       if (!widgetVisible) {
         ctx.ui.notify("failures: run /failures first to show the widget", "info");
+        return;
+      }
+      if (isBreakdown) {
+        ctx.ui.notify("failures: slug cycling is disabled in drill-down view", "info");
         return;
       }
       if (availableSlugs.length === 0) {
@@ -298,10 +285,14 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerShortcut(Key.ctrlShift("["), {
-    description: "Cycle failures to the previous model slug (backward)",
+    description: "Cycle failures to the previous model slug (summary view only)",
     handler: async (ctx) => {
       if (!widgetVisible) {
         ctx.ui.notify("failures: run /failures first to show the widget", "info");
+        return;
+      }
+      if (isBreakdown) {
+        ctx.ui.notify("failures: slug cycling is disabled in drill-down view", "info");
         return;
       }
       if (availableSlugs.length === 0) {
