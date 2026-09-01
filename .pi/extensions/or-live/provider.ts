@@ -748,13 +748,10 @@ async function lookupAndDisplayProvider(
       return;
     }
     logWithCtx(ctx, "  -> fetch error:", e);
-    if (sequence === latestGenerationSequence) {
-      ctx.ui.notify(
-        "openrouter-provider-status: failed to fetch generation record",
-        "warning",
-      );
-    }
-    console.warn("openrouter-provider-status: fetch error", e);
+    // Absorb quietly: this is a cosmetic background lookup, the footer still
+    // shows the last-known provider, and the model response is unaffected.
+    // Loud mode surfaces the details; the user gets no failure toast.
+    log("fetch error (generation record lookup skipped this turn):", e);
   }
 }
 
