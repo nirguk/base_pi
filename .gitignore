@@ -5,3 +5,6 @@ node_modules/
 
 # pi-llm-debugging output (provider request/response payloads)
 pi-llm-debugging/
+
+# pi-web-access runtime cache
+.pi/pi/web-search-cache/
