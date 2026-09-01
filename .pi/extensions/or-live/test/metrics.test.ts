@@ -91,9 +91,9 @@ describe("metrics selection and presentation", () => {
   it("ranks notable models by the requested raw or value metric", () => {
     const notable = findNotable(entries);
     expect(notable[0].category).toContain("Agentic Ability");
-    expect(notable[0].models[0]).toEqual({ slug: "acme/slow", name: "Slow", v: 80 });
+    expect(notable[0].models[0]).toEqual({ slug: "acme/slow", name: "Slow", v: 80, blended_cost: 10000 });
     expect(notable[2].category).toContain("Blended IPP");
-    expect(notable[2].models[0]).toEqual({ slug: "acme/fast", name: "Fast", v: expect.any(Number) });
+    expect(notable[2].models[0]).toEqual({ slug: "acme/fast", name: "Fast", v: expect.any(Number), blended_cost: 1000 });
   });
 
   it("renders rankings in descending throughput/IPP order with stable headers", () => {

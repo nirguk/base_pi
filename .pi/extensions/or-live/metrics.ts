@@ -494,23 +494,23 @@ export function snapshotAndDiff(entries: ModelEntry[]) {
 // ─── Notable Detection ──────────────────────────────────────────────────────────
 
 export function findNotable(entries: ModelEntry[]) {
-  const notable: { category: string; models: { slug: string; name: string; v: number }[] }[] = [];
+  const notable: { category: string; models: { slug: string; name: string; v: number; blended_cost: number }[] }[] = [];
 
   const byAgentic = [...entries].filter((e) => e.indices.agentic != null)
     .sort((a, b) => (b.indices.agentic || 0) - (a.indices.agentic || 0));
-  notable.push({ category: "🏆 Best Agentic Ability (raw)", models: byAgentic.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.indices.agentic })) });
+  notable.push({ category: "🏆 Best Agentic Ability (raw)", models: byAgentic.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.indices.agentic, blended_cost: e.pricing.blended })) });
 
   const byCoding = [...entries].filter((e) => e.indices.coding != null)
     .sort((a, b) => (b.indices.coding || 0) - (a.indices.coding || 0));
-  notable.push({ category: "💻 Best Coding Ability (raw)", models: byCoding.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.indices.coding })) });
+  notable.push({ category: "💻 Best Coding Ability (raw)", models: byCoding.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.indices.coding, blended_cost: e.pricing.blended })) });
 
   const byBlendedIPP = [...entries].filter((e) => e.ipp.blnd != null)
     .sort((a, b) => (b.ipp.blnd || 0) - (a.ipp.blnd || 0));
-  notable.push({ category: "💰 Best Blended IPP (ability-per-price, blended costs)", models: byBlendedIPP.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.ipp.blnd })) });
+  notable.push({ category: "💰 Best Blended IPP (ability-per-price, blended costs)", models: byBlendedIPP.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.ipp.blnd, blended_cost: e.pricing.blended })) });
 
   const byCachedIPP = [...entries].filter((e) => e.ipp.cach != null)
     .sort((a, b) => (b.ipp.cach || 0) - (a.ipp.cach || 0));
-  notable.push({ category: "🔄 Best Cached IPP (70% cache assumed)", models: byCachedIPP.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.ipp.cach })) });
+  notable.push({ category: "🔄 Best Cached IPP (70% cache assumed)", models: byCachedIPP.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.ipp.cach, blended_cost: e.pricing.blended })) });
 
   return notable;
 }
@@ -658,7 +658,7 @@ export function renderScoped(scoped: ScopedModelEntry[]) {
   return lines.join("\n");
 }
 
-export function renderNotable(notable: { category: string; models: { name: string; v: number }[] }[]) {
+export function renderNotable(notable: { category: string; models: { name: string; v: number; blended_cost: number }[] }[]) {
   const lines: string[] = [];
   lines.push("┌─ Notable ───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐");
   for (const n of notable) {
@@ -667,7 +667,8 @@ export function renderNotable(notable: { category: string; models: { name: strin
       const displayName = DISPLAY_MODEL_NAMES ? (m.name || "") : (m.slug || m.name || "");
       const name = FMT.pad(displayName, 40).slice(0, 40);
       const v = typeof m.v === "number" ? (m.v > 100 ? m.v.toFixed(1) : m.v.toFixed(2).padStart(6)) : String(m.v ?? "—");
-      lines.push(`│   ${name}  ${v}${" ".repeat(Math.max(0, 74 - String(v).length))} │`);
+      const cost = FMT.cost(m.blended_cost);
+      lines.push(`│   ${name}  ${v}  ${cost}${" ".repeat(Math.max(0, 62 - String(v).length - cost.length))} │`);
     }
     lines.push(`│─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│`);
   }
@@ -1164,7 +1165,7 @@ export function setupMetrics(pi: ExtensionAPI) {
   pi.registerTool({
     name: "or_metrics_query",
     label: "OR Metrics Query",
-    description: "Query OpenRouter ability-per-price metrics for the scoped models or for any tracked model. Use mode='scoped' for our models, mode='top N' for top N by blended IPP, mode='tps' for top models by provider-averaged p90 throughput, mode='find <query>' to search by name, or mode='notable' for analytical highlights. IPP fields: blndcod (BlndCd), blndagnt (BlndAg), cachcod (CachCd), cachagt (CachAg), blnd (BlndAv), cach (CachAv). TPS field: throughput_p90 (provider-averaged p90 tokens/sec over last 30m). Display uses slugs by default (set OR_METRICS_DISPLAY_MODEL_NAMES=1 to show human-readable names).",
+    description: "Query OpenRouter ability-per-price metrics for the scoped models or for any tracked model. Use mode='scoped' for our models, mode='top N' for top N by blended IPP, mode='tps' for top models by provider-averaged p90 throughput, mode='find <query>' to search by name, or mode='notable' for analytical highlights (each notable entry includes v (ability score or IPP) and blended_cost ($/M tokens)). IPP fields: blndcod (BlndCd), blndagnt (BlndAg), cachcod (CachCd), cachagt (CachAg), blnd (BlndAv), cach (CachAv). TPS field: throughput_p90 (provider-averaged p90 tokens/sec over last 30m). Display uses slugs by default (set OR_METRICS_DISPLAY_MODEL_NAMES=1 to show human-readable names).",
     parameters: Type.Object({
       mode: Type.String({ description: "scoped | top N | tps | find <query> | notable" }),
     }),
