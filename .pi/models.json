@@ -7,6 +7,15 @@
           "preferred_min_throughput": { "p90": 60 },
           "preferred_max_latency": { "p90": 3 }
         }
+      },
+      "modelOverrides": {
+        "inclusionai/ling-3.0-flash": {
+          "compat": {
+            "openRouterRouting": {
+              "order": ["novita"]
+            }
+          }
+        }
       }
     }
   }

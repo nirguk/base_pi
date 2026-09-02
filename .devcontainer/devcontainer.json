@@ -24,6 +24,7 @@
     "GH_TOKEN" : "${localEnv:GITHUB_PAT_TOKEN}",
     "GH_USER" : "${localEnv:GITHUB_USERNAME}",
     "PI_LLM_DEBUGGING_FOOTER" : "0",
-    "XDG_CONFIG_HOME": "/workspaces/base_pi/.pi"   
+    "XDG_CONFIG_HOME": "/workspaces/base_pi/.pi",
+    "NOVITA_API_KEY": "${localEnv:NOVITA}"   
   }
 }
