@@ -44,6 +44,29 @@ export function redWrap(text) {
   return `${RED}${text}${RESET}`;
 }
 
+/**
+ * Display label for a provider key. The bare `openrouter` key means the
+ * router itself with no upstream attribution available — label it so it
+ * is not read as "OpenRouter's own infrastructure failed".
+ */
+export function providerLabel(p) {
+  return p === "openrouter" ? "openrouter (unknown upstream)" : String(p);
+}
+
+/** Emit the shared header (title, dirs, cutoff, mode, notices). */
+function pushHeader(out, { first, SINCE_DAYS, cutoffTs, DIR, mode, notices }) {
+  out.push(first);
+  out.push(`Sessions dir: ${DIR}`);
+  if (cutoffTs) {
+    out.push(`Cutoff: last ${SINCE_DAYS} day(s) (files newer than ${new Date(cutoffTs).toISOString().slice(0, 19)}Z)`);
+  }
+  out.push(`Attribution mode: ${mode}`);
+  for (const n of notices ?? []) {
+    out.push(`[notice] ${n}`);
+  }
+  out.push("");
+}
+
 // ─── Rate cell ─────────────────────────────────────────────────
 
 /**
@@ -82,14 +105,9 @@ export function rateCellWidth(failures, attempts) {
  * Data shape:
  *   { groups, topKeys, slugAttempts, totalFailures, SINCE_DAYS, cutoffTs, DIR }
  */
-export function buildSummaryOutput({ groups, topKeys, slugAttempts, totalFailures, SINCE_DAYS, cutoffTs, DIR }) {
+export function buildSummaryOutput({ groups, topKeys, slugAttempts, totalFailures, SINCE_DAYS, cutoffTs, DIR, mode = "offline", notices = [] }) {
   const out = [];
-  out.push(`Failed turns: ${totalFailures} — grouped by slug`);
-  out.push(`Sessions dir: ${DIR}`);
-  if (cutoffTs) {
-    out.push(`Cutoff: last ${SINCE_DAYS} day(s) (files newer than ${new Date(cutoffTs).toISOString().slice(0, 19)}Z)`);
-  }
-  out.push("");
+  pushHeader(out, { first: `Failed turns: ${totalFailures} — grouped by slug`, SINCE_DAYS, cutoffTs, DIR, mode, notices });
 
   const hasRate = slugAttempts && slugAttempts.size > 0;
   const countW = Math.max(...topKeys.map((k) => String(groups[k]?.length ?? 0).length), 1);
@@ -131,14 +149,9 @@ export function buildSummaryOutput({ groups, topKeys, slugAttempts, totalFailure
  * Data shape:
  *   { slug, totalFailures, totalAttempts, byCategory, byProvider, SINCE_DAYS, cutoffTs, DIR }
  */
-export function buildBreakdownOutput({ slug, totalFailures, totalAttempts, byCategory, byProvider, SINCE_DAYS, cutoffTs, DIR }) {
+export function buildBreakdownOutput({ slug, totalFailures, totalAttempts, byCategory, byProvider, byProviderAttempts, providerTotal, SINCE_DAYS, cutoffTs, DIR, mode = "offline", notices = [] }) {
   const out = [];
-  out.push(`Failed turns: ${totalFailures} — breakdown for ${slug}`);
-  out.push(`Sessions dir: ${DIR}`);
-  if (cutoffTs) {
-    out.push(`Cutoff: last ${SINCE_DAYS} day(s) (files newer than ${new Date(cutoffTs).toISOString().slice(0, 19)}Z)`);
-  }
-  out.push("");
+  pushHeader(out, { first: `Failed turns: ${totalFailures} — breakdown for ${slug}`, SINCE_DAYS, cutoffTs, DIR, mode, notices });
 
   if (totalFailures === 0) {
     out.push(`No failures found for slug ${slug}, or slug not recognised.`);
@@ -165,18 +178,38 @@ export function buildBreakdownOutput({ slug, totalFailures, totalAttempts, byCat
   // ── Upstream providers ──────────────────────────────────
   const provEntries = Object.entries(byProvider).sort((a, b) => b[1] - a[1]);
   const provCountW = Math.max(...provEntries.map(([, c]) => String(c).length), 1);
-  const provRateW = rateCellWidth(totalFailures, totalFailures);
+  const provRateW = rateCellWidth(totalFailures, providerTotal ?? totalFailures);
 
-  out.push("Upstream providers:");
+  out.push("Upstream providers (final attempt):");
   out.push(`${pad("failures", provCountW)}  rate  provider`);
   out.push("-".repeat(60));
 
   for (const [prov, count] of provEntries) {
     const countPart = pad(count, provCountW);
-    const rate = renderRate(count, totalFailures, provRateW);
-    out.push(`${countPart}  ${rate}  ${prov}`);
+    const rate = renderRate(count, providerTotal ?? totalFailures, provRateW);
+    out.push(`${countPart}  ${rate}  ${providerLabel(prov)}`);
   }
   out.push("");
+
+  // Providers involved (incl. routed-around fallbacks).
+  if (byProviderAttempts) {
+    const attEntries = Object.entries(byProviderAttempts).sort((a, b) => b[1] - a[1]);
+    if (attEntries.length > 0) {
+      const attCountW = Math.max(...attEntries.map(([, c]) => String(c).length), 1);
+      const attRateW = rateCellWidth(totalFailures, providerTotal ?? totalFailures);
+
+      out.push("Providers involved (incl. fallbacks routed around):");
+      out.push(`${pad("failures", attCountW)}  rate  provider`);
+      out.push("-".repeat(60));
+
+      for (const [prov, count] of attEntries) {
+        const countPart = pad(count, attCountW);
+        const rate = renderRate(count, providerTotal ?? totalFailures, attRateW);
+        out.push(`${countPart}  ${rate}  ${providerLabel(prov)}`);
+      }
+      out.push("");
+    }
+  }
 
   // ── Total line ──────────────────────────────────────────
   const totalPct = totalAttempts > 0 ? Math.round((100 * totalFailures) / totalAttempts) : 0;

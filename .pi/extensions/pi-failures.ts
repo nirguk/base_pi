@@ -160,8 +160,20 @@ async function runAndDisplay(
     return;
   }
   const lines = trimmed.split("\n");
+  // Surface script notices (online fallback, missing API key) as UI
+  // notifications in addition to keeping them visible in the widget.
+  const widgetLines: string[] = [];
+  for (const line of lines) {
+    const m = line.match(/^\[notice\]\s*(.*)$/);
+    if (m) {
+      widgetLines.push(`⚠ ${m[1]}`);
+      ctx.ui.notify(`failures: ${m[1]}`, "warning");
+    } else {
+      widgetLines.push(line);
+    }
+  }
   if (ctx.mode === "tui") {
-    ctx.ui.setWidget("failures", failuresWidget(lines));
+    ctx.ui.setWidget("failures", failuresWidget(widgetLines));
     widgetVisible = true;
     isBreakdown = trimmed.includes("breakdown for");
     // Extract slugs from summary output for cycling.
@@ -179,13 +191,15 @@ async function runAndDisplay(
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("failures", {
     description:
-      "Analyze failed turns across past pi sessions (deterministic script). " +
-      "Flags: --slug MODEL-SLUG (drill-down), --since DAYS (default 7), --clear. " +
+      "Analyze failed turns across past pi sessions. " +
+      "Flags: --slug MODEL-SLUG (drill-down), --since DAYS (default 7), --offline (skip online provider attribution), --clear. " +
       "Default view shows per-model failure rates. " +
+      "By default, upstream providers are resolved online via OpenRouter's generation API " +
+      "(falls back to local-only attribution with a notice after failed retries). " +
       "Use --slug to see failure types and upstream providers for a specific model. " +
       "When the widget is visible, use Ctrl+Shift+] / Ctrl+Shift+[ to cycle slugs (summary view only).",
     getArgumentCompletions: async (prefix: string) => {
-      const flags = ["--clear", "--since", "--slug"];
+      const flags = ["--clear", "--since", "--slug", "--offline"];
       const valueFlags = new Set(["--since", "--slug"]);
       const commonNumbers = ["1", "3", "7", "14", "30"];
 
