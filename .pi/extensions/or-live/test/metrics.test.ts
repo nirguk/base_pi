@@ -92,8 +92,56 @@ describe("metrics selection and presentation", () => {
     const notable = findNotable(entries);
     expect(notable[0].category).toContain("Agentic Ability");
     expect(notable[0].models[0]).toEqual({ slug: "acme/slow", name: "Slow", v: 80, blended_cost: 10000 });
-    expect(notable[2].category).toContain("Blended IPP");
-    expect(notable[2].models[0]).toEqual({ slug: "acme/fast", name: "Fast", v: expect.any(Number), blended_cost: 1000 });
+    // Blended IPP is now at index 4 (after Agentic raw, Agentic <$1, Coding raw, Coding <$1)
+    expect(notable[4].category).toContain("Blended IPP");
+    expect(notable[4].models[0]).toEqual({ slug: "acme/fast", name: "Fast", v: expect.any(Number), blended_cost: 1000 });
+  });
+
+  it("includes <$1 blend-cost capped columns after the raw Agentic and Coding categories", () => {
+    const cheap = analyzeModels([
+      { id: "acme/cheap-fast", name: "Cheap Fast", pricing: { prompt: "0.0000005", completion: "0.0000005" }, benchmarks: { artificial_analysis: { coding_index: 90, agentic_index: 85 } } },
+      { id: "acme/cheap-slow", name: "Cheap Slow", pricing: { prompt: "0.0000005", completion: "0.0000005" }, benchmarks: { artificial_analysis: { coding_index: 70, agentic_index: 90 } } },
+      { id: "acme/expensive", name: "Expensive", pricing: { prompt: "0.01", completion: "0.01" }, benchmarks: { artificial_analysis: { coding_index: 95, agentic_index: 95 } } },
+    ]);
+    const notable = findNotable(cheap);
+
+    // Agentic raw is first; the <$1 capped Agentic column is second
+    const agenticRaw = notable.find((n) => n.category === "🏆 Best Agentic Ability (raw)");
+    const agenticCheap = notable.find((n) => n.category === "🏆 Best Agentic Ability (raw, <$1 blend cost)");
+    expect(agenticRaw).toBeDefined();
+    expect(agenticCheap).toBeDefined();
+    // Cheap Slow has higher agentic (90) than Cheap Fast (85); both are <$1
+    expect(agenticCheap!.models.map((m) => m.slug)).toEqual(["acme/cheap-slow", "acme/cheap-fast"]);
+    // Expensive model is excluded from the <$1 cap
+    expect(agenticCheap!.models.every((m) => m.blended_cost < 1)).toBe(true);
+
+    // Coding raw is third; the <$1 capped Coding column is fourth
+    const codingRaw = notable.find((n) => n.category === "💻 Best Coding Ability (raw)");
+    const codingCheap = notable.find((n) => n.category === "💻 Best Coding Ability (raw, <$1 blend cost)");
+    expect(codingRaw).toBeDefined();
+    expect(codingCheap).toBeDefined();
+    // Cheap Fast has higher coding (90) than Cheap Slow (70); both are <$1
+    expect(codingCheap!.models.map((m) => m.slug)).toEqual(["acme/cheap-fast", "acme/cheap-slow"]);
+    expect(codingCheap!.models.every((m) => m.blended_cost < 1)).toBe(true);
+  });
+
+  it("accepts a custom cap for the <$N blend-cost supplementary categories", () => {
+    const cheap = analyzeModels([
+      { id: "acme/cheap-fast", name: "Cheap Fast", pricing: { prompt: "0.0000005", completion: "0.0000005" }, benchmarks: { artificial_analysis: { coding_index: 90, agentic_index: 85 } } },
+      { id: "acme/cheap-slow", name: "Cheap Slow", pricing: { prompt: "0.0000005", completion: "0.0000005" }, benchmarks: { artificial_analysis: { coding_index: 70, agentic_index: 90 } } },
+      { id: "acme/expensive", name: "Expensive", pricing: { prompt: "0.01", completion: "0.01" }, benchmarks: { artificial_analysis: { coding_index: 95, agentic_index: 95 } } },
+    ]);
+    // With cap=100, the expensive model (blended_cost=10000) is excluded
+    const notable100 = findNotable(cheap, 100);
+    const agenticCheap100 = notable100.find((n) => n.category === "🏆 Best Agentic Ability (raw, <$100 blend cost)");
+    expect(agenticCheap100).toBeDefined();
+    // Expensive model has blended_cost=10000 which is >= 100, so excluded
+    expect(agenticCheap100!.models.map((m) => m.slug)).toEqual(["acme/cheap-slow", "acme/cheap-fast"]);
+    // With cap=20000, the expensive model is included
+    const notable20000 = findNotable(cheap, 20000);
+    const agenticCheap20000 = notable20000.find((n) => n.category === "🏆 Best Agentic Ability (raw, <$20000 blend cost)");
+    expect(agenticCheap20000).toBeDefined();
+    expect(agenticCheap20000!.models.map((m) => m.slug)).toContain("acme/expensive");
   });
 
   it("renders rankings in descending throughput/IPP order with stable headers", () => {

@@ -493,16 +493,29 @@ export function snapshotAndDiff(entries: ModelEntry[]) {
 
 // ─── Notable Detection ──────────────────────────────────────────────────────────
 
-export function findNotable(entries: ModelEntry[]) {
+/**
+ * Compute notable model highlights from entries.
+ *
+ * @param entries - full model entry list
+ * @param cap - maximum blended cost per million tokens for the
+ *   "<$N blend cost" supplementary categories. Defaults to 1.
+ */
+export function findNotable(entries: ModelEntry[], cap = 1) {
   const notable: { category: string; models: { slug: string; name: string; v: number; blended_cost: number }[] }[] = [];
 
   const byAgentic = [...entries].filter((e) => e.indices.agentic != null)
     .sort((a, b) => (b.indices.agentic || 0) - (a.indices.agentic || 0));
   notable.push({ category: "🏆 Best Agentic Ability (raw)", models: byAgentic.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.indices.agentic, blended_cost: e.pricing.blended })) });
 
+  const byAgenticCheap = byAgentic.filter((e) => e.pricing.blended < cap);
+  notable.push({ category: `🏆 Best Agentic Ability (raw, <$${cap} blend cost)`, models: byAgenticCheap.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.indices.agentic, blended_cost: e.pricing.blended })) });
+
   const byCoding = [...entries].filter((e) => e.indices.coding != null)
     .sort((a, b) => (b.indices.coding || 0) - (a.indices.coding || 0));
   notable.push({ category: "💻 Best Coding Ability (raw)", models: byCoding.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.indices.coding, blended_cost: e.pricing.blended })) });
+
+  const byCodingCheap = byCoding.filter((e) => e.pricing.blended < cap);
+  notable.push({ category: `💻 Best Coding Ability (raw, <$${cap} blend cost)`, models: byCodingCheap.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.indices.coding, blended_cost: e.pricing.blended })) });
 
   const byBlendedIPP = [...entries].filter((e) => e.ipp.blnd != null)
     .sort((a, b) => (b.ipp.blnd || 0) - (a.ipp.blnd || 0));
@@ -1075,7 +1088,7 @@ export function setupMetrics(pi: ExtensionAPI) {
 
   // ── Command: /or-metrics ──
   pi.registerCommand("or-metrics", {
-    description: "Show OpenRouter ability-per-price and provider-averaged throughput metrics. Args: scoped | notable | top | tps | changes",
+    description: "Show OpenRouter ability-per-price and provider-averaged throughput metrics. Args: scoped | notable | top | tps | changes [--cap N] (default cap: $1)",
     getArgumentCompletions: (prefix: string): { value: string; label: string }[] | null => {
       const opts = ["scoped", "notable", "top", "tps", "changes"];
       return opts.filter((o) => o.startsWith(prefix)).map((o) => ({ value: o, label: o }));
@@ -1098,7 +1111,11 @@ export function setupMetrics(pi: ExtensionAPI) {
       }
       if (!cachedEntries) return; // refresh already notified
 
-      const mode = args.trim().toLowerCase();
+      // Parse --cap N from args (e.g. "/or-metrics notable --cap 3")
+      const capMatch = args.match(/--cap\s+(\d+(?:\.\d+)?)/);
+      const cap = capMatch ? parseFloat(capMatch[1]) : 1;
+      // Strip --cap N from args so the mode parsing is unaffected
+      const mode = args.replace(/--cap\s+\S+\s*/, "").trim().toLowerCase();
 
       // For tps mode, wait for background fetch to complete if running
       if (mode === "tps" && tpsFetchInProgress && tpsFetchPromise) {
@@ -1125,9 +1142,11 @@ export function setupMetrics(pi: ExtensionAPI) {
         setModelBenchmarkTPS(e.slug, cachedTPSData[e.slug] ?? null);
       }
 
-      const notable = findNotable(cachedEntries);
+      const notable = findNotable(cachedEntries, cap);
       const lines: string[] = [];
-      const caption = `Models with AA data: ${cachedEntries.length} · cache rate: ${(DEFAULT_CACHE_RATE * 100).toFixed(0)}%`;
+      const caption = cap === 1
+        ? `Models with AA data: ${cachedEntries.length} · cache rate: ${(DEFAULT_CACHE_RATE * 100).toFixed(0)}%`
+        : `Models with AA data: ${cachedEntries.length} · cache rate: ${(DEFAULT_CACHE_RATE * 100).toFixed(0)} · blend-cost cap: <$${cap}`;
 
       if (mode === "scoped") {
         lines.push(renderScoped(cachedScoped!));
@@ -1165,13 +1184,14 @@ export function setupMetrics(pi: ExtensionAPI) {
   pi.registerTool({
     name: "or_metrics_query",
     label: "OR Metrics Query",
-    description: "Query OpenRouter ability-per-price metrics for the scoped models or for any tracked model. Use mode='scoped' for our models, mode='top N' for top N by blended IPP, mode='tps' for top models by provider-averaged p90 throughput, mode='find <query>' to search by name, or mode='notable' for analytical highlights (each notable entry includes v (ability score or IPP) and blended_cost ($/M tokens)). IPP fields: blndcod (BlndCd), blndagnt (BlndAg), cachcod (CachCd), cachagt (CachAg), blnd (BlndAv), cach (CachAv). TPS field: throughput_p90 (provider-averaged p90 tokens/sec over last 30m). Display uses slugs by default (set OR_METRICS_DISPLAY_MODEL_NAMES=1 to show human-readable names).",
+    description: "Query OpenRouter ability-per-price metrics for the scoped models or for any tracked model. Use mode='scoped' for our models, mode='top N' for top N by blended IPP, mode='tps' for top models by provider-averaged p90 throughput, mode='find <query>' to search by name, or mode='notable' for analytical highlights (each notable entry includes v (ability score or IPP) and blended_cost ($/M tokens). IPP fields: blndcod (BlndCd), blndagnt (BlndAg), cachcod (CachCd), cachagt (CachAg), blnd (BlndAv), cach (CachAv). TPS field: throughput_p90 (provider-averaged p90 tokens/sec over last 30m). Display uses slugs by default (set OR_METRICS_DISPLAY_MODEL_NAMES=1 to show human-readable names). Optional cap parameter limits the <$N blend-cost supplementary categories (default: 1).",
     parameters: Type.Object({
       mode: Type.String({ description: "scoped | top N | tps | find <query> | notable" }),
+      cap: Type.Optional(Type.Number({ description: "Blend-cost cap in dollars for the <$N supplementary categories (default: 1)" })),
     }),
     async execute(
       toolCallId: string,
-      params: { mode: string },
+      params: { mode: string; cap?: number },
       _signal: AbortSignal,
       _onUpdate: unknown,
       _ctx: ToolExecuteContext,
@@ -1249,7 +1269,7 @@ export function setupMetrics(pi: ExtensionAPI) {
           ipp: e.ipp,
         }));
       } else if (mode === "notable") {
-        result.notable = findNotable(cachedEntries);
+        result.notable = findNotable(cachedEntries, params.cap ?? 1);
       } else {
         result.error = `Unknown mode: ${mode}. Use: scoped, top N, tps, find <query>, notable`;
       }
