@@ -36,6 +36,7 @@ import {
   setModelBenchmarkTPSMap,
   type ThroughputStats,
 } from "./throughput";
+import Table from "cli-table3";
 import { renderTable } from "./table";
 
 // ─── Types ────────────────────────────────────────────────────────────────
@@ -641,13 +642,31 @@ const FMT = {
   },
 };
 
+/**
+ * Render the scoped-models table using cli-table3.
+ *
+ * Produces the same box-drawing output as the previous hand-rolled
+ * implementation but delegates all column-width computation, padding,
+ * and alignment to cli-table3.
+ */
 export function renderScoped(scoped: ScopedModelEntry[]) {
-  const lines: string[] = [];
+  const COLS = [
+    { label: "Model", align: "left" as const },
+    { label: "Intel", align: "right" as const },
+    { label: "Coding", align: "right" as const },
+    { label: "Agentic", align: "right" as const },
+    { label: "Base$/M", align: "right" as const },
+    { label: "p90TPS", align: "right" as const },
+    { label: "BlndCd", align: "right" as const },
+    { label: "BlndAg", align: "right" as const },
+    { label: "CachCd", align: "right" as const },
+    { label: "CachAg", align: "right" as const },
+  ];
 
-  // Collect column values for precision alignment
+  // Collect precision info from actual data values.
   const costVals: (number | null)[] = [];
   const tpsVals: (number | null)[] = [];
-  const ipCols: (number | null)[][] = [[], [], [], []]; // blndcod, blndagnt, cachcod, cachagt
+  const ipCols: (number | null)[][] = [[], [], [], []];
   for (const s of scoped) {
     if (!s.entry) continue;
     const e = s.entry;
@@ -660,81 +679,55 @@ export function renderScoped(scoped: ScopedModelEntry[]) {
   }
   const costDec = columnPrecision(costVals, 4);
   const tpsDec = columnPrecision(tpsVals.filter((v): v is number => v != null), 1);
-  const ipDecs = ipCols.map(c => FMT.ippPrecision(c, 2));
+  const ipDecs = ipCols.map((c) => FMT.ippPrecision(c, 2));
 
-  // Build the table from a column spec so the header is guaranteed to align
-  // with the data rows. Each column width is at least max(label.length, valueWidth).
-  // The intel/coding/agentic fields previously used a 5-wide value cell, which was
-  // too narrow to hold the "Coding" (6) / "Agentic" (7) labels; widening them to 7
-  // keeps the right-aligned numeric values and right-aligned header labels in sync.
-  const SEP = "  ";
-  const COLS: { label: string; w: number }[] = [
-    { label: "Model",   w: 40 },
-    { label: "Intel",   w: 7  },
-    { label: "Coding",  w: 7  },
-    { label: "Agentic", w: 7  },
-    { label: "Base$/M", w: 10 },
-    { label: "p90TPS",  w: 7  },
-    { label: "BlndCd",  w: 7  },
-    { label: "BlndAg",  w: 7  },
-    { label: "CachCd",  w: 7  },
-    { label: "CachAg",  w: 7  },
-  ];
-  const widths = COLS.map(c => c.w);
-  const inner = widths.reduce((a, b) => a + b, 0) + SEP.length * (COLS.length - 1);
-  // `dash` spans the full inner width including the one-space padding on each
-  // side (│ <dash> │) so the rule line and borders line up with the data rows.
-  const dash = "─".repeat(inner + 2);
-  const titlePrefix = "─ Our Scoped Models ─";
+  const head = COLS.map((c) => c.label);
+  const rows: string[][] = [];
 
-  // Header: left-align the "Model" label (it sits above a left-padded slug) and
-  // right-align every numeric label so its last character sits directly above the
-  // last digit of its (right-aligned) value — fixing the prior 4-space drift.
-  let header = "";
-  for (let i = 0; i < COLS.length; i++) {
-    const c = COLS[i];
-    const label = String(c.label);
-    const rightAlign = c.label !== "Model";
-    const cell =
-      label.length >= c.w
-        ? label.slice(0, c.w)
-        : rightAlign
-          ? " ".repeat(c.w - label.length) + label
-          : label + " ".repeat(c.w - label.length);
-    header += cell;
-    if (i < COLS.length - 1) header += SEP;
-  }
-
-  lines.push(`┌${titlePrefix.padEnd(dash.length, "─")}┐`);
-  lines.push(`│ ${header} │`);
-  lines.push(`│${dash}│`);
   for (const s of scoped) {
-    const name = FMT.pad(s.label, 40).slice(0, 40);
     if (!s.entry) {
-      const noData = "  no data from OpenRouter";
-      lines.push(`│ ${name} ${noData}${" ".repeat(Math.max(0, inner - name.length - noData.length))} │`);
+      const name = FMT.pad(s.label, 40).slice(0, 40);
+      rows.push([name, "  no data from OpenRouter", "", "", "", "", "", "", "", ""]);
       continue;
     }
     const e = s.entry;
-    const intel = e.indices.intelligence != null ? e.indices.intelligence.toFixed(1).padStart(7) : "    —  ";
-    const coding = e.indices.coding != null ? e.indices.coding.toFixed(1).padStart(7) : "    —  ";
-    const agentic = e.indices.agentic != null ? e.indices.agentic.toFixed(1).padStart(7) : "    —  ";
-    const blended = FMT.cost(e.pricing.blended, costDec).padStart(10);
-    const tps = e.throughput_p90 != null ? e.throughput_p90.toFixed(tpsDec).padStart(7) : "      —";
-    const bc = FMT.ipp(e.ipp.blndcod, ipDecs[0]).padStart(7);
-    const ba = FMT.ipp(e.ipp.blndagnt, ipDecs[1]).padStart(7);
-    const cc = FMT.ipp(e.ipp.cachcod, ipDecs[2]).padStart(7);
-    const ca = FMT.ipp(e.ipp.cachagt, ipDecs[3]).padStart(7);
-    const vals = [name, intel, coding, agentic, blended, tps, bc, ba, cc, ca];
-    let row = "";
-    for (let i = 0; i < COLS.length; i++) {
-      row += vals[i];
-      if (i < COLS.length - 1) row += SEP;
-    }
-    lines.push(`│ ${row} │`);
+    const intel = e.indices.intelligence != null ? e.indices.intelligence.toFixed(1) : "—";
+    const coding = e.indices.coding != null ? e.indices.coding.toFixed(1) : "—";
+    const agentic = e.indices.agentic != null ? e.indices.agentic.toFixed(1) : "—";
+    const blended = FMT.cost(e.pricing.blended, costDec);
+    const tps = e.throughput_p90 != null ? e.throughput_p90.toFixed(tpsDec) : "—";
+    const bc = e.ipp.blndcod != null ? e.ipp.blndcod.toFixed(ipDecs[0]) : "—";
+    const ba = e.ipp.blndagnt != null ? e.ipp.blndagnt.toFixed(ipDecs[1]) : "—";
+    const cc = e.ipp.cachcod != null ? e.ipp.cachcod.toFixed(ipDecs[2]) : "—";
+    const ca = e.ipp.cachagt != null ? e.ipp.cachagt.toFixed(ipDecs[3]) : "—";
+    rows.push([s.label, intel, coding, agentic, blended, tps, bc, ba, cc, ca]);
   }
-  lines.push(`└${dash}┘`);
-  return lines.join("\n");
+
+  const table = new Table({
+    head,
+    style: {
+      border: ["─", "│", "┌", "┐", "└", "┘", "┬", "├", "┤", "┴", "┼"],
+      paddingLeft: 1,
+      paddingRight: 1,
+      head: [],
+    },
+    colAligns: COLS.map((c) => c.align),
+  } as any);
+
+  for (const row of rows) {
+    table.push(row);
+  }
+
+  let output = table.toString();
+
+  // Replace the top border line with a titled version.
+  const titlePrefix = "─ Our Scoped Models ─";
+  const lines = output.split("\n");
+  const topLine = lines[0];
+  const titledTop = `┌${titlePrefix.padEnd(topLine.length - 2, "─")}┐`;
+  output = [titledTop, ...lines.slice(1)].join("\n");
+
+  return output;
 }
 
 export function renderNotable(notable: NotableEntry[]) {

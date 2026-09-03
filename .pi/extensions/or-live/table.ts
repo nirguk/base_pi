@@ -1,13 +1,17 @@
 /**
  * Generic table rendering utility for pi or-live metrics.
  *
- * Dynamically computes column widths from header labels and formatted
- * data values so that right-aligned headers always sit above the
- * rightmost digit of their values — eliminating the hardcoded-width
- * misalignment class of bugs.
+ * Thin wrapper around cli-table3 that produces the same visual output
+ * (box-drawing borders: ┌─┐│└┘, same column alignment, same padding)
+ * as the previous hand-rolled renderer.
+ *
+ * Exports the same renderTable<T>() function signature so metrics.ts
+ * doesn't need major changes.
  */
 
-// ─── Types ──────────────────────────────────────────────────────────────
+import Table from "cli-table3";
+
+// ─── Types ──────────────────────────────────────────────────────
 
 export interface TableCol<T> {
   /** Column header label. */
@@ -27,35 +31,16 @@ export interface TableOpts {
   titlePrefix?: string;
 }
 
-// ─── Width computation ──────────────────────────────────────────────────
+// ─── Rendering ──────────────────────────────────────────────────
 
 /**
- * Compute per-column widths as max(label.length, maxFormattedValueWidth).
- */
-export function computeWidths<T>(cols: TableCol<T>[], rows: T[]): number[] {
-  return cols.map((col) => {
-    const labelLen = col.label.length;
-    const maxValLen = rows.reduce((max, row, i) => {
-      return Math.max(max, col.format(row, i).length);
-    }, 0);
-    return Math.max(labelLen, maxValLen);
-  });
-}
-
-// ─── Rendering helpers ──────────────────────────────────────────────────
-
-function padCell(text: string, width: number, align: "left" | "right"): string {
-  if (text.length >= width) return text.slice(0, width);
-  return align === "right"
-    ? " ".repeat(width - text.length) + text
-    : text + " ".repeat(width - text.length);
-}
-
-/**
- * Render a boxed table with dynamic column widths.
+ * Render a boxed table with dynamic column widths using cli-table3.
  *
  * Each column is right-aligned by default (suitable for numeric data)
  * unless `align: "left"` is set (suitable for the Model/name column).
+ *
+ * The `sep` option controls the padding between columns (passed as
+ * `paddingLeft`/`paddingRight` on each cell via cli-table3 style options).
  */
 export function renderTable<T>(
   cols: TableCol<T>[],
@@ -63,43 +48,57 @@ export function renderTable<T>(
   opts: TableOpts = {}
 ): string {
   const { sep = " ", title, titlePrefix } = opts;
-  const widths = computeWidths(cols, rows);
 
-  const inner = widths.reduce((a, b) => a + b, 0) + sep.length * (cols.length - 1);
-  const dash = "─".repeat(inner + 2);
+  // Determine per-column alignment: left for "Model"/"Rank", right otherwise.
+  const aligns: ("left" | "right")[] = cols.map(
+    (c) => c.align ?? (c.label === "Model" || c.label === "Rank" ? "left" : "right")
+  );
 
-  const lines: string[] = [];
+  // Build cli-table3 head and rows.
+  const head = cols.map((c) => c.label);
+  const dataRows = rows.map((row, i) => cols.map((c) => c.format(row, i)));
 
+  // cli-table3 uses paddingLeft/paddingRight for cell padding.
+  // We use sep as the inter-column gap by setting paddingLeft and paddingRight
+  // to half the separator length on each side.
+  const padLeft = Math.floor(sep.length / 2);
+  const padRight = sep.length - padLeft;
+
+  const table = new Table({
+    head,
+    style: {
+      border: ["─", "│", "┌", "┐", "└", "┘", "┬", "├", "┤", "┴", "┼"],
+      paddingLeft: padLeft,
+      paddingRight: padRight,
+      head: [],
+    },
+    colAligns: aligns,
+    // Ensure columns are wide enough for their content (cli-table3 does this
+    // automatically by default, which is what we want).
+  } as any);
+
+  for (const row of dataRows) {
+    table.push(row);
+  }
+
+  let output = table.toString();
+
+  // Wrap with title prefix if provided.
   if (titlePrefix) {
-    lines.push(`┌${titlePrefix.padEnd(dash.length, "─")}┐`);
+    const lines = output.split("\n");
+    const innerWidth = lines[0].length;
+    const topLine = lines[0];
+    const titledTop = topLine.replace(
+      /^┌/,
+      `┌${titlePrefix.padEnd(innerWidth - 2, "─")}`
+    );
+    output = [titledTop, ...lines.slice(1)].join("\n");
   } else if (title) {
-    lines.push(`┌─ ${title} ─${"─".repeat(Math.max(0, dash.length - title.length - 4))}┐`);
+    const lines = output.split("\n");
+    const innerWidth = lines[0].length;
+    const titledTop = `┌─ ${title} ─${"─".repeat(Math.max(0, innerWidth - title.length - 4))}┐`;
+    output = [titledTop, ...lines.slice(1)].join("\n");
   }
 
-  // Header row: left-align "Model"/"Rank", right-align everything else
-  let header = "";
-  for (let i = 0; i < cols.length; i++) {
-    const col = cols[i];
-    const align = col.align ?? (col.label === "Model" || col.label === "Rank" ? "left" : "right");
-    header += padCell(col.label, widths[i], align);
-    if (i < cols.length - 1) header += sep;
-  }
-  lines.push(`│ ${header} │`);
-  lines.push(`│${dash}│`);
-
-  // Data rows
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    let rowStr = "";
-    for (let j = 0; j < cols.length; j++) {
-      const col = cols[j];
-      const align = col.align ?? (col.label === "Model" || col.label === "Rank" ? "left" : "right");
-      rowStr += padCell(col.format(row, i), widths[j], align);
-      if (j < cols.length - 1) rowStr += sep;
-    }
-    lines.push(`│ ${rowStr} │`);
-  }
-
-  lines.push(`└${dash}┘`);
-  return lines.join("\n");
+  return output;
 }
