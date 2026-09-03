@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Thinking Token Distribution — Pi/OpenRouter Sessions</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; background: #1a1a2e; color: #e0e0e0; }
+  h1 { color: #e94560; }
+  h2 { color: #0f3460; background: #16213e; padding: 10px; border-radius: 8px; }
+  .chart-container { background: #16213e; padding: 20px; border-radius: 8px; margin: 20px 0; }
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin: 20px 0; }
+  .stat { background: #16213e; padding: 15px; border-radius: 8px; text-align: center; }
+  .stat .value { font-size: 2em; font-weight: bold; color: #e94560; }
+  .stat .label { color: #a0a0a0; font-size: 0.9em; }
+  canvas { max-height: 400px; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #333; }
+  th { background: #0f3460; color: #e94560; }
+  tr:hover { background: #1a1a3e; }
+  .error-row { color: #e94560; }
+  .success-row { color: #4ecca3; }
+</style>
+</head>
+<body>
+<h1>🧠 Thinking Token Distribution — Pi/OpenRouter Sessions</h1>
+
+<div class="summary">
+  <div class="stat"><div class="value">603</div><div class="label">Total Assistant Messages</div></div>
+  <div class="stat"><div class="value">520</div><div class="label">With Thinking Data</div></div>
+  <div class="stat"><div class="value">128</div><div class="label">Terminated (error/aborted)</div></div>
+  <div class="stat"><div class="value">475</div><div class="label">Successful</div></div>
+  <div class="stat"><div class="value">105</div><div class="label">Terminated with Thinking Content</div></div>
+</div>
+
+<h2>Thinking Length Distribution (chars)</h2>
+<div class="chart-container">
+  <canvas id="thinkingChart"></canvas>
+</div>
+
+<h2>Reasoning Token Count Distribution</h2>
+<div class="chart-container">
+  <canvas id="tokenChart"></canvas>
+</div>
+
+<h2>Terminated Messages with Thinking Content</h2>
+<table>
+  <tr><th>Session</th><th>Model</th><th>Thinking Chars</th><th>Text Chars</th><th>Reasoning Tokens</th><th>stopReason</th></tr>
+  
+    <tr class="error-row">
+      <td>3b1a3f30</td>
+      <td>deepseek/deepseek-v4-flash-0731</td>
+      <td>598</td>
+      <td>0</td>
+      <td>0</td>
+      <td>aborted</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>ddea09a7</td>
+      <td>deepseek/deepseek-v4-flash-0731</td>
+      <td>3,244</td>
+      <td>142</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>42680880</td>
+      <td>deepseek/deepseek-v4-flash-0731</td>
+      <td>759</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>050f9cf6</td>
+      <td>deepseek/deepseek-v4-flash-0731</td>
+      <td>2,474</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>ec904896</td>
+      <td>deepseek/deepseek-v4-flash-0731</td>
+      <td>5,363</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>1016a36f</td>
+      <td>deepseek/deepseek-v4-flash-0731</td>
+      <td>4,984</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>8a020e58</td>
+      <td>deepseek/deepseek-v4-flash-0731</td>
+      <td>2,715</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>a7c1b1db</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>41</td>
+      <td>53</td>
+      <td>0</td>
+      <td>aborted</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>67f41cf7</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>306</td>
+      <td>9,563</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>8df348c3</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>336</td>
+      <td>10,159</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>ccd9ffac</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>357</td>
+      <td>8,124</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>81fd8dab</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>166</td>
+      <td>6,514</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>36c5601a</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>118</td>
+      <td>9,966</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>e3983c02</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>118</td>
+      <td>10,933</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>bfd7c911</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>118</td>
+      <td>10,028</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>b61748b8</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>54</td>
+      <td>5,638</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>8969b0ef</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>4,355</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>d89ed69f</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>81</td>
+      <td>4,325</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>514d55bc</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>41</td>
+      <td>5,132</td>
+      <td>0</td>
+      <td>aborted</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>16826c90</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>26,311</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>c12d4a04</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>30,101</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>1ab2554a</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>22,191</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>28f80ecd</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>31,367</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>f8217f06</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>25,777</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>7e0573f1</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>23,367</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>e03001ce</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>20,300</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>123f5b2b</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>22,803</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>34959f7d</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>25,191</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>043c51f2</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>7,434</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>76b91135</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>11,952</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>d6136de3</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>19,142</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>f41994f1</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>18,843</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>fd95f897</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>15,943</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>5aa62ea3</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>4,216</td>
+      <td>139</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>4f3ca602</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>22,050</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>e5e9f4a0</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>3,097</td>
+      <td>105</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>cdac9bc2</td>
+      <td>inclusionai/ling-3.0-flash</td>
+      <td>21,486</td>
+      <td>0</td>
+      <td>0</td>
+      <td>aborted</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>8027fd35</td>
+      <td>deepseek/deepseek-v4-flash-0731</td>
+      <td>1,349</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>dcf6b21d</td>
+      <td>deepseek/deepseek-v4-flash-0731</td>
+      <td>774</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>0079c0c2</td>
+      <td>deepseek/deepseek-v4-flash-0731</td>
+      <td>875</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>c0f8a40d</td>
+      <td>deepseek/deepseek-v4-flash-0731</td>
+      <td>4,910</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>95a0d104</td>
+      <td>deepseek/deepseek-v4-flash-0731</td>
+      <td>1,325</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>d1bd0f57</td>
+      <td>deepseek/deepseek-v4-flash-0731</td>
+      <td>6,084</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>bf4e0d4c</td>
+      <td>deepseek/deepseek-v4-flash-0731</td>
+      <td>1,041</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>00738491</td>
+      <td>deepseek/deepseek-v4-flash-0731</td>
+      <td>1,548</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>6b8baa3d</td>
+      <td>poolside/laguna-s-2.1</td>
+      <td>2,784</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>e68cd7d7</td>
+      <td>poolside/laguna-s-2.1</td>
+      <td>4,792</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>2b9499bb</td>
+      <td>poolside/laguna-s-2.1</td>
+      <td>7,424</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>beea8704</td>
+      <td>poolside/laguna-s-2.1</td>
+      <td>5,979</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+    <tr class="error-row">
+      <td>5a0cf797</td>
+      <td>poolside/laguna-s-2.1</td>
+      <td>9,322</td>
+      <td>0</td>
+      <td>0</td>
+      <td>error</td>
+    </tr>
+  
+</table>
+
+<script>
+const termThinking = [0,598,0,3244,759,2474,5363,4984,2715,0,0,0,41,0,306,336,357,166,118,118,118,54,4355,81,41,26311,30101,22191,31367,25777,23367,20300,22803,25191,7434,11952,19142,18843,15943,0,4216,0,0,22050,0,0,3097,21486,1349,774,875,4910,1325,6084,1041,1548,2784,4792,7424,5979,9322,8465,7187,6786,0,254,282,296,219,282,328,333,356,295,140,148,122,93,93,121,275,0,2929,295,6048,5985,0,531,5462,722,6677,6164,0,6519,6161,4773,4583,6337,6493,294,4893,6749,6108,7477,537,3394,7263,271,0,0,0,7535,2616,6146,4901,470,0,0,0,3203,0,7257,21446,1150,3815,3757,3106,0];
+const succThinking = [2214,1073,209,275,0,500,0,0,163,1758,1204,0,895,2771,0,0,0,0,194,0,1781,7325,357,0,85,644,0,161,2391,333,94,53,219,60,142,439,78,2047,2684,124,945,54,93,901,84,71,118,978,307,1594,143,714,136,77,67,714,59,155,641,422,348,329,329,685,129,102,167,257,103,146,86,88,92,403,76,51,470,57,57,57,57,57,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,41,236,247,183,183,237,237,237,193,310,134,244,118,1164,54,173,888,13270,805,223,55,187,41,41,70,185,147,95,65,399,102,1280,1815,19551,134,13882,197,42,327,438,3193,179,89,212,419,77,657,119,2096,266,440,94,224,406,343,188,79,182,72,5035,85,66,880,151,81,129,59,51,93,41,88,33,49,69,130,491,174,308,2296,67,194,51,69,129,57,55,69,2149,60,63,858,335,40,270,77,2644,102,63,2117,46,82,96,56,110,63,1053,575,112,95,2284,343,60,1145,10250,152,106,125,179,146,342,73,159,333,265,95,1077,316,1525,87,500,950,985,86,8640,4009,2521,10326,604,8078,569,690,5471,120,151,73,152,102,1469,108,5912,1708,117,441,932,18723,2288,55,681,99,198,167,1987,1763,1966,1051,441,220,0,100,0,5878,98,427,236,118,232,347,323,151,131,89,506,190,289,322,230,165,301,219,248,300,286,219,313,217,261,1122,177,394,111,187,1512,310,77,26,292,284,943,300,197,363,1124,111,1204,388,225,0,0,0,0,371,298,235,1889,1263,313,293,0,718,369,203,0,4044,926,0,0,0,194,994,199,2641,518,0,0,752,0,0,0,0,0,0,0,0,0,0,0,1223,0,0,0,0,0,0,0,85,0,80,5001,962,510,791,1258,1460,6283,373,0,570,8852,0,592,521,218,0,8938,0,730,654,0,1298,412,2720,2121,2144,7176,0,224,1634,1323,3489,11210,7314,9069,11225,2301,3911,3662,14485,6171,10152,3042,7139,4501,534,0,2523,5904,11583,2387,815,0,0,182,0,0,1583,0,0,1911,0,267,0,0,128,5430,920,4695,4941,3921,5308,5792,0,64,96,5032,5158,179,2574,1768,106,54,2866,230,66,7489,341,249,2416,1216,2492,157,218,84,145,125,2366,154,103,167,102,1032,1757,102,1258,1868,501,1545,1175,78];
+const termTokens = [];
+const succTokens = [566,271,53,70,125,41,444,305,226,700,49,453,1856,91,22,163,41,612,85,24,14,56,15,37,111,20,525,691,31,242,14,24,232,21,18,30,254,78,406,36,184,34,20,17,180,15,39,162,108,89,84,84,176,33,26,42,66,26,37,22,22,23,102,19,13,119,15,15,15,15,15,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,59,62,46,46,60,60,60,49,78,34,61,30,296,14,44,230,3370,205,57,14,47,11,11,18,47,37,24,17,101,26,324,463,7474,34,4337,50,11,83,112,824,45,23,54,106,20,168,30,538,67,112,24,56,103,88,47,20,47,18,1283,22,17,222,38,21,33,15,13,24,11,22,9,13,18,33,131,44,78,588,17,50,13,18,33,15,14,18,677,15,16,218,85,10,68,20,770,26,16,540,12,21,24,14,28,16,268,145,28,24,581,87,15,293,2632,38,27,32,45,37,86,19,40,85,68,24,276,81,391,22,127,241,251,22,2214,1035,642,2655,156,2068,144,176,1400,30,38,19,39,26,383,27,1516,446,30,112,235,4833,586,14,174,25,50,43,506,446,500,270,112,56,25,2055,19,108,59,30,58,87,83,38,33,23,128,48,73,81,58,42,77,55,62,75,72,55,79,55,66,283,45,101,28,47,383,79,20,7,73,72,246,76,50,95,287,28,308,98,57,93,75,60,481,324,79,74,182,93,52,1036,238,50,254,50,671,132,193,313,22,20,1275,247,131,203,321,375,1605,95,145,2260,154,134,56,2281,186,167,331,104,699,542,546,1827,57,417,338,894,2854,1862,2319,2858,585,997,934,3671,1565,2572,775,1817,1146,134,640,1499,2948,610,209,47,403,488,68,33,1382,233,1192,1250,993,1347,1482,16,24,1275,1314,45,655,454,27,14,733,59,17,1903,86,63,616,310,630,40,55,21,37,32,598,39,26,42,26,260,444,26,319,471,127,394,299,20];
+
+// Helper to create histogram bins
+function histogram(data, binSize) {
+  if (data.length === 0) return { labels: [], counts: [] };
+  const max = Math.max(...data);
+  const bins = [];
+  const counts = [];
+  for (let i = 0; i <= max; i += binSize) {
+    bins.push(i + '-' + (i + binSize));
+    counts.push(data.filter(v => v >= i && v < i + binSize).length);
+  }
+  return { labels: bins, counts };
+}
+
+// Thinking length chart
+const termHist = termThinking.length > 0 ? histogram(termThinking, 500) : { labels: [], counts: [] };
+const succHist = succThinking.length > 0 ? histogram(succThinking, 500) : { labels: [], counts: [] };
+
+new Chart(document.getElementById('thinkingChart'), {
+  type: 'bar',
+  data: {
+    labels: termHist.labels,
+    datasets: [
+      { label: 'Terminated', data: termHist.counts, backgroundColor: 'rgba(233,69,96,0.7)' },
+      { label: 'Successful', data: succHist.counts, backgroundColor: 'rgba(78,204,163,0.7)' }
+    ]
+  },
+  options: {
+    responsive: true,
+    plugins: { title: { display: true, text: 'Thinking Length (chars)', color: '#e0e0e0' },
+               legend: { labels: { color: '#e0e0e0' } } },
+    scales: {
+      x: { ticks: { color: '#a0a0a0', maxRotation: 45 }, grid: { color: '#333' } },
+      y: { ticks: { color: '#a0a0a0' }, grid: { color: '#333' }, title: { display: true, text: 'Count', color: '#e0e0e0' } }
+    }
+  }
+});
+
+// Token count chart
+const termTokenHist = termTokens.length > 0 ? histogram(termTokens, 100) : { labels: [], counts: [] };
+const succTokenHist = succTokens.length > 0 ? histogram(succTokens, 100) : { labels: [], counts: [] };
+
+new Chart(document.getElementById('tokenChart'), {
+  type: 'bar',
+  data: {
+    labels: termTokenHist.labels,
+    datasets: [
+      { label: 'Terminated', data: termTokenHist.counts, backgroundColor: 'rgba(233,69,96,0.7)' },
+      { label: 'Successful', data: succTokenHist.counts, backgroundColor: 'rgba(78,204,163,0.7)' }
+    ]
+  },
+  options: {
+    responsive: true,
+    plugins: { title: { display: true, text: 'Reasoning Token Count', color: '#e0e0e0' },
+               legend: { labels: { color: '#e0e0e0' } } },
+    scales: {
+      x: { ticks: { color: '#a0a0a0', maxRotation: 45 }, grid: { color: '#333' } },
+      y: { ticks: { color: '#a0a0a0' }, grid: { color: '#333' }, title: { display: true, text: 'Count', color: '#e0e0e0' } }
+    }
+  }
+});
+</script>
+</body>
+</html>
