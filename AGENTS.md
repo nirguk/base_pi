@@ -2,6 +2,12 @@
 
 Project-level instructions for pi.
 
+- `.pi/extensions/` — pi extensions (TypeScript, one `.ts` file per extension)
+- `.pi/scripts/` — standalone scripts used by extensions (`.mjs`/`.ts`, run directly with `node`)
+- `.pi/git/` — **read-only** upstream clones for reference: search them, never edit, commit, or build in them
+
+There is no package.json or test suite here. When you change a script, verify it by running it; when you change a doc, verify example commands actually work.
+
 ## Tool Use Tips
 
 ### File Search
@@ -27,6 +33,8 @@ Output (collapsed tree, not repeated full paths):
             └── format.ts
 ```
 
+If `tree` is not installed, fall back to plain `find` with the same expressions.
+
 #### `fd` — use for flat listing and piping
 
 Use `fd` when you need a flat list of paths (e.g., to pipe into `xargs`, `wc -l`, or another command). It is faster than `find`, uses simpler glob syntax, and respects `.gitignore` automatically.
@@ -41,23 +49,33 @@ fd --type f --glob "*.ts" . | wc -l
 fd --type f --glob "*.log" . -X rm
 ```
 
-**Never use bare `bash find`** for filename searches — reach for `findtree` or `fd` first.
+If `fd` is not installed, use `find . -type f -name "*.ts" -not -path "*/node_modules/*"` instead.
 
-### Content Search (use `rg`, never `grep -r`)
+Prefer `findtree`/`fd` over bare `bash find` for filename searches.
+
+#### Directory inspection — prefer `tree`/`findtree` over repeated `ls`
+
+For one directory, `ls` is fine; for nested or many directories, use `tree -L 2 <dir>` or `findtree` once instead of stack of `ls` calls — you see structure in one read.
+
+### Content Search (use `rg`, never `grep -r` by default)
 
 - **`rg` is the default for all content searches.** It is faster on large trees and automatically skips `.gitignore`-d directories.
-- **Never use `bash grep -r`** for content searches. If you catch yourself about to, stop and use `rg` instead.
-- **If `grep -r` is unavoidable**, scope it to a narrow path so it doesn't recurse into `.pi/` or `node_modules` and time out.
+- **Never use `bash grep -r`** for content searches when `rg` is available. If you catch yourself about to, stop and use `rg` instead.
+- **If `grep -r` is unavoidable** (e.g., `rg` missing), scope it narrowly so it doesn't recurse into `.pi/` or `node_modules` and time out — e.g. `grep -rn "TODO" src/ --exclude-dir=node_modules`.
 
 | Goal | Wrong | Right |
 |------|-------|-------|
 | Search file contents | `grep -r "or-metrics" .` | `rg "or-metrics"` |
-| Search specific ext | `grep -r "TODO" --include="*.ts"` | `rg "TODO" --ext ts` |
+| Search specific ext | `grep -r "TODO" --include="*.ts"` | `rg -t ts "TODO"` (also `-g '*.ts'`) |
 | Invert match | `grep -rv "debug" .` | `rg -v "debug"` |
 
 ### File Editing
 
-#### `patch` — apply unified diffs (primary for targeted changes)
+#### `edit` — precise replacements (primary for targeted changes)
+
+Use `edit` for targeted text replacement. Multiple disjoint changes in one file go in **one call** as an `edits[]` array — do not make N sequential calls. Each `oldText` must be unique and non-overlapping in the file; if two changes touch the same block or nearby lines, merge them into one edit. Keep `oldText` as small as possible while still unique — don't pad with large unchanged regions.
+
+#### `patch` — apply unified diffs (when you have a diff or want reversibility)
 
 `patch` applies a unified diff file to a target file. It is reversible (`patch -R`), composable, and never silently overwrites content — it applies changes line-by-line and reports conflicts.
 
@@ -75,10 +93,6 @@ patch -R src/index.ts < changes.patch
 ```bash
 diff -u original.ts modified.ts > changes.patch && patch original.ts < changes.patch
 ```
-
-#### `edit` — precise single-change replacement
-
-Use `edit` for one targeted text replacement at a time. Match exact `oldText` blocks; avoid overlapping edits in a single call. For multiple disjoint changes in one file, include all in one `edits[]` array.
 
 #### `write` — new files or complete rewrites
 
@@ -103,8 +117,8 @@ node -e "const fs=require('fs'); const f=fs.readFileSync('data.json','utf8'); co
 - **Use `read` over `cat`/`sed`** — handles truncation gracefully and supports offset/limit for large files.
 - **Check `~/.pi/agent/AGENTS.md`** for global tips that apply across all projects.
 
-## Project Structure
+## Before Finishing
 
-- `.pi/extensions/` — pi extensions (TypeScript)
-- `.pi/scripts/` — standalone scripts used by extensions
-- `.pi/git/` — cloned upstream repos for reference
+- Re-read your diff: check example commands for typos — tool flags are easy to get wrong (this file has had one).
+- If you changed a script in `.pi/scripts/`, run it to confirm it executes.
+- Confirm you made no edits under `.pi/git/` (read-only reference).
