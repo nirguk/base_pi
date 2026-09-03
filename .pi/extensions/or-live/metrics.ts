@@ -706,12 +706,13 @@ export function renderScoped(scoped: ScopedModelEntry[]) {
   const table = new Table({
     head,
     style: {
-      border: ["─", "│", "┌", "┐", "└", "┘", "┬", "├", "┤", "┴", "┼"],
-      paddingLeft: 1,
-      paddingRight: 1,
-      head: [],
+      head: ["yellow"],
+      border: ["grey"],
+      compact: false,
     },
     colAligns: COLS.map((c) => c.align),
+    paddingLeft: 1,
+    paddingRight: 1,
   } as any);
 
   for (const row of rows) {
@@ -721,10 +722,17 @@ export function renderScoped(scoped: ScopedModelEntry[]) {
   let output = table.toString();
 
   // Replace the top border line with a titled version.
-  const titlePrefix = "─ Our Scoped Models ─";
+  // Constructed by combining non-ANSI border chars with ANSI-wrapped title text,
+  // so the visible width is the sum of known parts — no strip function needed.
+  const titleText = "Our Scoped Models";
   const lines = output.split("\n");
   const topLine = lines[0];
-  const titledTop = `┌${titlePrefix.padEnd(topLine.length - 2, "─")}┐`;
+  // Get the visible width of the table from the rendered top border.
+  const topLineWidth = topLine.replace(/\x1b\[[0-9;]*m/g, "").length;
+  const fillWidth = topLineWidth - 2; // space between ┌ and ┐
+  const leftFill = "─".repeat(Math.max(0, Math.floor((fillWidth - titleText.length) / 2)));
+  const rightFill = "─".repeat(Math.max(0, fillWidth - leftFill.length - titleText.length));
+  const titledTop = `┌${leftFill}\x1b[33m${titleText}\x1b[39m${rightFill}┐`;
   output = [titledTop, ...lines.slice(1)].join("\n");
 
   return output;
@@ -739,23 +747,20 @@ export function renderScoped(scoped: ScopedModelEntry[]) {
  */
 export function renderNotable(notable: NotableEntry[]) {
   const lines: string[] = [];
+  const contentLines: string[] = [];
+  let maxWidth = 0;
 
-  // Title bar — same width as the widest table we produce.
-  const titleBar = "┌─ Notable ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐";
-  lines.push(titleBar);
+  const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
   for (const n of notable) {
     if (n.kind === "sideBySide") {
-      const head = [n.leftTitle, "Score ($/M)", n.rightTitle, "Score ($/M)"];
+      const head = [n.leftTitle, "Score (raw)", n.rightTitle, "Score (<$1>)"];
       const table = new Table({
         head,
-        style: {
-          border: ["─", "│", "┌", "┐", "└", "┘", "┬", "├", "┤", "┴", "┼"],
-          paddingLeft: 1,
-          paddingRight: 1,
-          head: [],
-        },
+        style: { head: ["yellow"], border: ["grey"], compact: false },
         colAligns: ["left", "right", "left", "right"],
+        paddingLeft: 1,
+        paddingRight: 1,
       } as any);
 
       const maxRows = Math.max(n.leftModels.length, n.rightModels.length);
@@ -769,23 +774,16 @@ export function renderNotable(notable: NotableEntry[]) {
         table.push([leftName, leftScore, rightName, rightScore]);
       }
 
-      let output = table.toString();
-      // Prepend the section title as the first line.
-      const sectionLine = `│ ${n.title}`;
-      output = [sectionLine, ...output.split("\n").slice(1)].join("\n");
-      lines.push(output);
+      contentLines.push(`│ ${n.title}`);
+      contentLines.push(table.toString());
     } else {
-      // Vertical entry
       const head = ["Model", "Score", "Cost/M"];
       const table = new Table({
         head,
-        style: {
-          border: ["─", "│", "┌", "┐", "└", "┘", "┬", "├", "┤", "┴", "┼"],
-          paddingLeft: 1,
-          paddingRight: 1,
-          head: [],
-        },
+        style: { head: ["yellow"], border: ["grey"], compact: false },
         colAligns: ["left", "right", "right"],
+        paddingLeft: 1,
+        paddingRight: 1,
       } as any);
 
       for (const m of n.models) {
@@ -795,18 +793,27 @@ export function renderNotable(notable: NotableEntry[]) {
         table.push([displayName, v, cost]);
       }
 
-      let output = table.toString();
-      const sectionLine = `│ ${n.category}`;
-      output = [sectionLine, ...output.split("\n").slice(1)].join("\n");
-      lines.push(output);
-
-      // Separator line
-      const sepLine = "│" + "─".repeat(112) + "│";
-      lines.push(sepLine);
+      contentLines.push(`│ ${n.category}`);
+      contentLines.push(table.toString());
     }
   }
 
-  lines.push("└" + "─".repeat(112) + "┘");
+  // Compute max visible width (strip ANSI codes from all lines).
+  for (const line of contentLines) {
+    for (const l of line.split("\n")) {
+      const w = stripAnsi(l).length;
+      if (w > maxWidth) maxWidth = w;
+    }
+  }
+
+  // Build title bar and bottom border from the computed width.
+  const titlePrefix = "─ Notable ─";
+  const titleBar = `┌${titlePrefix}${"─".repeat(Math.max(0, maxWidth - titlePrefix.length - 2))}┐`;
+  lines.push(`\x1b[33m${titleBar}\x1b[39m`);
+  for (const line of contentLines) {
+    lines.push(line);
+  }
+  lines.push(`└${"─".repeat(maxWidth - 2)}┘`);
   return lines.join("\n");
 }
 
@@ -865,75 +872,97 @@ export function renderChanges(data: { priorDate: string | null; currentDate: str
     return "No prior snapshot yet. Run /or-metrics a second time later to see changes.";
   }
   const lines: string[] = [];
+  const contentLines: string[] = [];
+  let maxWidth = 0;
 
-  // Header
-  const headerLine = `┌─ Changes since ${data.priorDate} ───────────────────────────────────────────────────────────────────────────────────┐`;
-  lines.push(headerLine);
+  const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
   if (!data.added.length && !data.removed.length && !data.changes.length) {
-    lines.push(`│ ✓ No changes. (${data.currentDate})`);
-    lines.push("└─────────────────────────────────────────────────────────────────────────────────────────────────────┘");
-    return lines.join("\n");
-  }
+    const noChangeLine = `│ ✓ No changes. (${data.currentDate})`;
+    maxWidth = stripAnsi(noChangeLine).length;
+    contentLines.push(noChangeLine);
+  } else {
+    if (data.added.length > 0) {
+      const addLine = `│ 🆕  New models (${data.added.length}):`;
+      contentLines.push(addLine);
+      const w = stripAnsi(addLine).length;
+      if (w > maxWidth) maxWidth = w;
 
-  if (data.added.length > 0) {
-    lines.push(`│ 🆕  New models (${data.added.length}):`);
-    // Use cli-table3 for the 3-column layout
-    const table = new Table({
-      head: [],
-      style: {
-        border: [" ", " ", " ", " ", " ", " ", " ", " ", " ", " ", " "],
-        paddingLeft: 0,
-        paddingRight: 0,
+      const table = new Table({
         head: [],
-      },
-      colWidths: [40, 40, 40],
-    } as any);
-    const names = data.added.slice(0, 12);
-    for (let i = 0; i < names.length; i += 3) {
-      const row = names.slice(i, i + 3);
-      while (row.length < 3) row.push("");
-      table.push(row);
+        style: { head: ["yellow"], border: [" ", " ", " ", " ", " ", " ", " ", " ", " ", " ", " "], compact: false },
+        colWidths: [40, 40, 40],
+      } as any);
+      const names = data.added.slice(0, 12);
+      for (let i = 0; i < names.length; i += 3) {
+        const row = names.slice(i, i + 3);
+        while (row.length < 3) row.push("");
+        table.push(row);
+      }
+      for (const l of table.toString().split("\n")) {
+        const prefixed = `│    ${l}`;
+        contentLines.push(prefixed);
+        const w = stripAnsi(prefixed).length;
+        if (w > maxWidth) maxWidth = w;
+      }
+      if (data.added.length > 12) {
+        const moreLine = `│    … and ${data.added.length - 12} more`;
+        contentLines.push(moreLine);
+        const w = stripAnsi(moreLine).length;
+        if (w > maxWidth) maxWidth = w;
+      }
     }
-    // Prefix each data row with "│    "
-    const tableOut = table.toString();
-    for (const l of tableOut.split("\n")) {
-      lines.push(`│    ${l}`);
+    if (data.removed.length > 0) {
+      const remLine = `│ 🗑️  Gone (${data.removed.length}): ${data.removed.join(", ")}`;
+      contentLines.push(remLine);
+      const w = stripAnsi(remLine).length;
+      if (w > maxWidth) maxWidth = w;
     }
-    if (data.added.length > 12) lines.push(`│    … and ${data.added.length - 12} more`);
-  }
-  if (data.removed.length > 0) {
-    lines.push(`│ 🗑️  Gone (${data.removed.length}): ${data.removed.join(", ")}`);
-  }
-  if (data.changes.length > 0) {
-    lines.push(`│ 📊  Changes (${data.changes.length}):`);
-    const sorted = [...data.changes].sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
-    // Use cli-table3 for the changes table
-    const table = new Table({
-      head: ["Model", "Change"],
-      style: {
-        border: ["─", "│", "┌", "┐", "└", "┘", "┬", "├", "┤", "┴", "┼"],
+    if (data.changes.length > 0) {
+      const changeLine = `│ 📊  Changes (${data.changes.length}):`;
+      contentLines.push(changeLine);
+      const w = stripAnsi(changeLine).length;
+      if (w > maxWidth) maxWidth = w;
+
+      const sorted = [...data.changes].sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+      const table = new Table({
+        head: ["Model", "Change"],
+        style: { head: ["yellow"], border: ["grey"], compact: false },
+        colAligns: ["left", "left"],
         paddingLeft: 1,
         paddingRight: 1,
-        head: [],
-      },
-      colAligns: ["left", "left"],
-    } as any);
-    for (const c of sorted.slice(0, 12)) {
-      const arrow = c.delta > 0 ? "↑" : "↓";
-      const val = c.metric === "price"
-        ? `${arrow}${Math.abs(c.delta).toFixed(1)}% (${FMT.cost(c.old)} → ${FMT.cost(c.new)})${c.metric === "price" ? "" : ""}`
-        : `${arrow}${Math.abs(c.delta).toFixed(1)}pt (${c.old} → ${c.new})`;
-      const displayLabel = DISPLAY_MODEL_NAMES ? c.name : c.slug;
-      table.push([displayLabel, val]);
+      } as any);
+      for (const c of sorted.slice(0, 12)) {
+        const arrow = c.delta > 0 ? "↑" : "↓";
+        const val = c.metric === "price"
+          ? `${arrow}${Math.abs(c.delta).toFixed(1)}% (${FMT.cost(c.old)} → ${FMT.cost(c.new)})${c.metric === "price" ? "" : ""}`
+          : `${arrow}${Math.abs(c.delta).toFixed(1)}pt (${c.old} → ${c.new})`;
+        const displayLabel = DISPLAY_MODEL_NAMES ? c.name : c.slug;
+        table.push([displayLabel, val]);
+      }
+      for (const l of table.toString().split("\n")) {
+        const prefixed = `│ ${l}`;
+        contentLines.push(prefixed);
+        const w = stripAnsi(prefixed).length;
+        if (w > maxWidth) maxWidth = w;
+      }
+      if (data.changes.length > 12) {
+        const moreLine = `│    … and ${data.changes.length - 12} more`;
+        contentLines.push(moreLine);
+        const w = stripAnsi(moreLine).length;
+        if (w > maxWidth) maxWidth = w;
+      }
     }
-    const tableOut = table.toString();
-    for (const l of tableOut.split("\n")) {
-      lines.push(`│ ${l}`);
-    }
-    if (data.changes.length > 12) lines.push(`│    … and ${data.changes.length - 12} more`);
   }
-  lines.push("└─────────────────────────────────────────────────────────────────────────────────────────────────────┘");
+
+  // Build header and bottom border from the computed width.
+  const headerText = `─ Changes since ${data.priorDate} ─`;
+  const headerLine = `┌${headerText}${"─".repeat(Math.max(0, maxWidth - headerText.length - 2))}┐`;
+  lines.push(`\x1b[33m${headerLine}\x1b[39m`);
+  for (const line of contentLines) {
+    lines.push(line);
+  }
+  lines.push(`└${"─".repeat(maxWidth - 2)}┘`);
   return lines.join("\n");
 }
 
@@ -1238,9 +1267,14 @@ export function setupMetrics(pi: ExtensionAPI) {
       } else if (mode === "changes") {
         lines.push(renderChanges(cachedChanges!));
       } else {
-        lines.push(`╔══════════════════════════════════════════════════════════════════════════════╗`);
-        lines.push(`║  OpenRouter Metrics — ${caption.padEnd(53)}║`);
-        lines.push(`╚══════════════════════════════════════════════════════════════════════════════╝`);
+        const prefix = "  OpenRouter Metrics — ";
+        const contentWidth = prefix.length + caption.length;
+        const borderLine = `╔${'═'.repeat(contentWidth)}╗`;
+        const middleLine = `║${prefix}${caption.padEnd(contentWidth - prefix.length)}║`;
+        const bottomLine = `╚${'═'.repeat(contentWidth)}╝`;
+        lines.push(`\x1b[33m${borderLine}\x1b[39m`);
+        lines.push(`\x1b[33m${middleLine}\x1b[39m`);
+        lines.push(`\x1b[33m${bottomLine}\x1b[39m`);
         lines.push("");
         lines.push(renderScoped(cachedScoped!));
         lines.push("");

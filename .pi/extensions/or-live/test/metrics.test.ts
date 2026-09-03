@@ -14,6 +14,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function stripAnsi(s: string): string {
+  return s.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
 describe("OpenRouter model analysis", () => {
   it("converts token prices to dollars per million and computes blended/cached IPP", () => {
     const [entry] = analyzeModels([{
@@ -188,8 +192,8 @@ describe("metrics selection and presentation", () => {
     }));
     const out = renderScoped(scopedWithData);
     const lines = out.split("\n");
-    const header = lines[1];
-    const row = lines[3];
+    const header = stripAnsi(lines[1]);
+    const row = stripAnsi(lines[3]);
 
     // "Model" is left-aligned: the label start sits above the value start.
     expect(header.indexOf("Model")).toBe(row.indexOf("deepseek/deepseek-v4-flash-0731"));
@@ -213,11 +217,13 @@ describe("metrics selection and presentation", () => {
       expect(labelEnd).toBe(valueEnd);
     }
 
-    // The whole table must remain within a single, consistent inner width.
-    const topBorder = lines[0];
-    const bottomBorder = lines[lines.length - 1];
-    expect(topBorder.length).toBe(bottomBorder.length);
-    expect(out.split("\n").every((l) => l.length === topBorder.length)).toBe(true);
+    // The whole table must remain within a single, consistent inner width
+    // (after stripping ANSI escape codes, which are invisible but count toward string length).
+    const stripped = lines.map(stripAnsi);
+    const topBorderLen = stripped[0].length;
+    const bottomBorderLen = stripped[stripped.length - 1].length;
+    expect(topBorderLen).toBe(bottomBorderLen);
+    expect(stripped.every((l) => l.length === topBorderLen)).toBe(true);
   });
 
   it("aligns right-aligned header labels over their values in renderTop and renderTPS", () => {
@@ -235,7 +241,7 @@ describe("metrics selection and presentation", () => {
     // renderTop: integer indices (toFixed(0)), right-aligned labels.
     const top = renderTop(data);
     let lines = top.split("\n");
-    let header = lines[1], row = lines[3];
+    let header = stripAnsi(lines[1]), row = stripAnsi(lines[3]);
     const topPairs: [string, string][] = [
       ["Intel", "52"], ["Coding", "69"], ["Agent", "48"],
       ["$M/M", "$0.0720"], ["p90TPS", "106.8"],
@@ -254,8 +260,8 @@ describe("metrics selection and presentation", () => {
     // renderTPS: right-aligned labels over values
     const tps = renderTPS(data);
     lines = tps.split("\n");
-    header = lines[1];
-    row = lines[3];
+    header = stripAnsi(lines[1]);
+    row = stripAnsi(lines[3]);
     const tpsPairs: [string, string][] = [
       ["Base$/M", "$0.0720"], ["BlndAv", "800.00"], ["Coding", "69"],
       ["Agentic", "48"], ["Intel", "52"], ["p90 TPS(30m)", "106.8"],
