@@ -35,6 +35,7 @@ import {
   setModelBenchmarkTPSMap,
   type ThroughputStats,
 } from "./throughput";
+import { renderTable } from "./table";
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -137,6 +138,32 @@ interface DiffResult {
   removed: string[];
   changes: DiffChange[];
 }
+
+// ─── Notable Types ─────────────────────────────────────────────────────
+
+interface NotableModel {
+  slug: string;
+  name: string;
+  v: number;
+  blended_cost: number;
+}
+
+interface NotableSideBySide {
+  kind: "sideBySide";
+  title: string;
+  leftTitle: string;
+  rightTitle: string;
+  leftModels: NotableModel[];
+  rightModels: NotableModel[];
+}
+
+interface NotableVertical {
+  kind: "vertical";
+  category: string;
+  models: NotableModel[];
+}
+
+type NotableEntry = NotableSideBySide | NotableVertical;
 
 /** Context passed to the `or_metrics_query` tool execute handler. */
 interface ToolExecuteContext {
@@ -496,36 +523,61 @@ export function snapshotAndDiff(entries: ModelEntry[]) {
 /**
  * Compute notable model highlights from entries.
  *
+ * Raw ability categories (agentic, coding) are returned as
+ * side-by-side pairs: left column is the uncapped (legacy) top-5
+ * and right column is the price-capped top-5.
+ *
+ * IPP categories (blended, cached) are price-affected by nature
+ * and are returned as vertical entries.
+ *
  * @param entries - full model entry list
  * @param cap - maximum blended cost per million tokens for the
- *   "<$N blend cost" supplementary categories. Defaults to 1.
+ *   capped variation. Defaults to 1.
  */
-export function findNotable(entries: ModelEntry[], cap = 1) {
-  const notable: { category: string; models: { slug: string; name: string; v: number; blended_cost: number }[] }[] = [];
+export function findNotable(entries: ModelEntry[], cap = 1): NotableEntry[] {
+  const result: NotableEntry[] = [];
 
   const byAgentic = [...entries].filter((e) => e.indices.agentic != null)
     .sort((a, b) => (b.indices.agentic || 0) - (a.indices.agentic || 0));
-  notable.push({ category: "🏆 Best Agentic Ability (raw)", models: byAgentic.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.indices.agentic, blended_cost: e.pricing.blended })) });
-
   const byAgenticCheap = byAgentic.filter((e) => e.pricing.blended < cap);
-  notable.push({ category: `🏆 Best Agentic Ability (raw, <$${cap} blend cost)`, models: byAgenticCheap.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.indices.agentic, blended_cost: e.pricing.blended })) });
+  result.push({
+    kind: "sideBySide",
+    title: "🏆 Agentic Ability",
+    leftTitle: "Agentic (raw)",
+    rightTitle: `Agentic <$${cap}>`,
+    leftModels: byAgentic.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.indices.agentic, blended_cost: e.pricing.blended })),
+    rightModels: byAgenticCheap.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.indices.agentic, blended_cost: e.pricing.blended })),
+  });
 
   const byCoding = [...entries].filter((e) => e.indices.coding != null)
     .sort((a, b) => (b.indices.coding || 0) - (a.indices.coding || 0));
-  notable.push({ category: "💻 Best Coding Ability (raw)", models: byCoding.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.indices.coding, blended_cost: e.pricing.blended })) });
-
   const byCodingCheap = byCoding.filter((e) => e.pricing.blended < cap);
-  notable.push({ category: `💻 Best Coding Ability (raw, <$${cap} blend cost)`, models: byCodingCheap.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.indices.coding, blended_cost: e.pricing.blended })) });
+  result.push({
+    kind: "sideBySide",
+    title: "💻 Coding Ability",
+    leftTitle: "Coding (raw)",
+    rightTitle: `Coding <$${cap}>`,
+    leftModels: byCoding.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.indices.coding, blended_cost: e.pricing.blended })),
+    rightModels: byCodingCheap.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.indices.coding, blended_cost: e.pricing.blended })),
+  });
 
   const byBlendedIPP = [...entries].filter((e) => e.ipp.blnd != null)
     .sort((a, b) => (b.ipp.blnd || 0) - (a.ipp.blnd || 0));
-  notable.push({ category: "💰 Best Blended IPP (ability-per-price, blended costs)", models: byBlendedIPP.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.ipp.blnd, blended_cost: e.pricing.blended })) });
+  result.push({
+    kind: "vertical",
+    category: "💰 Best Blended IPP (ability-per-price, blended costs)",
+    models: byBlendedIPP.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.ipp.blnd, blended_cost: e.pricing.blended })),
+  });
 
   const byCachedIPP = [...entries].filter((e) => e.ipp.cach != null)
     .sort((a, b) => (b.ipp.cach || 0) - (a.ipp.cach || 0));
-  notable.push({ category: "🔄 Best Cached IPP (70% cache assumed)", models: byCachedIPP.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.ipp.cach, blended_cost: e.pricing.blended })) });
+  result.push({
+    kind: "vertical",
+    category: "🔄 Best Cached IPP (70% cache assumed)",
+    models: byCachedIPP.slice(0, 5).map((e) => ({ slug: e.slug, name: e.name, v: e.ipp.cach, blended_cost: e.pricing.blended })),
+  });
 
-  return notable;
+  return result;
 }
 
 // ─── Display Helpers ────────────────────────────────────────────────────────────
@@ -671,19 +723,64 @@ export function renderScoped(scoped: ScopedModelEntry[]) {
   return lines.join("\n");
 }
 
-export function renderNotable(notable: { category: string; models: { name: string; v: number; blended_cost: number }[] }[]) {
+export function renderNotable(notable: NotableEntry[]) {
   const lines: string[] = [];
-  lines.push("┌─ Notable ───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐");
+  const boxWidth = 112;
+  lines.push("┌─ Notable ─".padEnd(boxWidth + 4, "─") + "┐");
+
   for (const n of notable) {
-    lines.push(`│ ${FMT.pad(n.category, 112)} │`);
-    for (const m of n.models) {
-      const displayName = DISPLAY_MODEL_NAMES ? (m.name || "") : (m.slug || m.name || "");
-      const name = FMT.pad(displayName, 40).slice(0, 40);
-      const v = typeof m.v === "number" ? (m.v > 100 ? m.v.toFixed(1) : m.v.toFixed(2).padStart(6)) : String(m.v ?? "—");
-      const cost = FMT.cost(m.blended_cost);
-      lines.push(`│   ${name}  ${v}  ${cost}${" ".repeat(Math.max(0, 62 - String(v).length - cost.length))} │`);
+    if (n.kind === "sideBySide") {
+      // Side-by-side table: Model | Score ($/M) | Model | Score ($/M)
+      const leftW = 30; // model name column width
+      const scoreW = 16; // score + cost column width
+      const sep = " │ ";
+      const innerWidth = leftW + scoreW + sep.length + leftW + scoreW;
+      const dash = "─".repeat(boxWidth);
+
+      // Title row
+      lines.push(`│ ${FMT.pad(n.title, boxWidth)} │`);
+
+      // Header row
+      const leftCol1 = FMT.pad(n.leftTitle, leftW);
+      const leftCol2 = FMT.pad("Score ($/M)", scoreW).padStart(scoreW);
+      const rightCol1 = FMT.pad(n.rightTitle, leftW);
+      const rightCol2 = FMT.pad("Score ($/M)", scoreW).padStart(scoreW);
+      const headerRow = leftCol1 + leftCol2 + sep + rightCol1 + rightCol2;
+      lines.push(`│ ${headerRow}${" ".repeat(Math.max(0, boxWidth - headerRow.length))} │`);
+      lines.push(`│${dash}│`);
+
+      // Data rows — pad the shorter list with empty rows
+      const maxRows = Math.max(n.leftModels.length, n.rightModels.length);
+      for (let i = 0; i < maxRows; i++) {
+        const lm = n.leftModels[i];
+        const rm = n.rightModels[i];
+
+        const leftName = lm ? FMT.pad(DISPLAY_MODEL_NAMES ? (lm.name || lm.slug) : lm.slug, leftW).slice(0, leftW) : " ".repeat(leftW);
+        const leftScore = lm
+          ? (lm.v > 100 ? lm.v.toFixed(1) : lm.v.toFixed(2)).padStart(scoreW - 1) + " " + FMT.cost(lm.blended_cost) + "/M"
+          : " ".repeat(scoreW);
+        const rightName = rm ? FMT.pad(DISPLAY_MODEL_NAMES ? (rm.name || rm.slug) : rm.slug, leftW).slice(0, leftW) : " ".repeat(leftW);
+        const rightScore = rm
+          ? (rm.v > 100 ? rm.v.toFixed(1) : rm.v.toFixed(2)).padStart(scoreW - 1) + " " + FMT.cost(rm.blended_cost) + "/M"
+          : " ".repeat(scoreW);
+
+        const row = leftName + leftScore + sep + rightName + rightScore;
+        lines.push(`│ ${row}${" ".repeat(Math.max(0, boxWidth - row.length))} │`);
+      }
+
+      lines.push(`│${dash}│`);
+    } else {
+      // Vertical entry — same as before
+      lines.push(`│ ${FMT.pad(n.category, boxWidth)} │`);
+      for (const m of n.models) {
+        const displayName = DISPLAY_MODEL_NAMES ? (m.name || "") : (m.slug || m.name || "");
+        const name = FMT.pad(displayName, 40).slice(0, 40);
+        const v = typeof m.v === "number" ? (m.v > 100 ? m.v.toFixed(1) : m.v.toFixed(2).padStart(6)) : String(m.v ?? "—");
+        const cost = FMT.cost(m.blended_cost);
+        lines.push(`│   ${name}  ${v}  ${cost}${" ".repeat(Math.max(0, 62 - String(v).length - cost.length))} │`);
+      }
+      lines.push(`│─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│`);
     }
-    lines.push(`│─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│`);
   }
   lines.push("└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘");
   return lines.join("\n");
@@ -711,76 +808,29 @@ export function renderTop(entries: ModelEntry[]) {
   const cDec = FMT.ippPrecision(cVals, 2);
   const tpsDec = columnPrecision(tpsVals.filter((v): v is number => v != null), 1);
 
-  // Column spec: width >= max(label.length, valueWidth) so right-aligned labels
-  // line up over right-aligned values. "Rank" (4) and "Intel"/"Coding"/"Agent"
-  // (5/6/7) are wider than the 2-wide rank / 4-wide index fields, so those
-  // fields are widened to fit.
-  const SEP = " ";
-  const COLS: { label: string; w: number }[] = [
-    { label: "Rank",   w: 4  },
-    { label: "Model",  w: 40 },
-    { label: "Intel",  w: 7  },
-    { label: "Coding", w: 7  },
-    { label: "Agent",  w: 7  },
-    { label: "$M/M",   w: 6  },
-    { label: "p90TPS", w: 6  },
-    { label: "BlndCd", w: 6  },
-    { label: "BlndAg", w: 6  },
-    { label: "CachCd", w: 6  },
-    { label: "CachAg", w: 6  },
-    { label: "BlndAv", w: 7  },
-    { label: "CachAv", w: 7  },
-  ];
-  const widths = COLS.map(c => c.w);
-  const inner = widths.reduce((a, b) => a + b, 0) + SEP.length * (COLS.length - 1);
-  const dash = "─".repeat(inner + 2);
   const titlePrefix = "─ Top 20 by Blended IPP ─";
-
-  // Header: left-align "Rank" & "Model", right-align numeric labels so each
-  // label's last char sits above the last digit of its (right-aligned) value.
-  let header = "";
-  for (let i = 0; i < COLS.length; i++) {
-    const c = COLS[i];
-    const label = String(c.label);
-    const rightAlign = !["Rank", "Model"].includes(c.label);
-    const cell =
-      label.length >= c.w
-        ? label.slice(0, c.w)
-        : rightAlign
-          ? " ".repeat(c.w - label.length) + label
-          : label + " ".repeat(c.w - label.length);
-    header += cell;
-    if (i < COLS.length - 1) header += SEP;
-  }
-
-  const lines: string[] = [];
-  lines.push(`┌${titlePrefix.padEnd(dash.length, "─")}┐`);
-  lines.push(`│ ${header} │`);
-  lines.push(`│${dash}│`);
-  ranked.slice(0, 20).forEach((e, i) => {
-    const rank = (i + 1).toString().padStart(4);
-    const name = FMT.pad(modelLabel(e).length > 40 ? modelLabel(e).slice(0, 38) + "…" : modelLabel(e), 40);
-    const intel = e.indices.intelligence != null ? e.indices.intelligence.toFixed(0).padStart(7) : "    —  ";
-    const coding = e.indices.coding != null ? e.indices.coding.toFixed(0).padStart(7) : "    —  ";
-    const agentic = e.indices.agentic != null ? e.indices.agentic.toFixed(0).padStart(7) : "    —  ";
-    const blended = FMT.cost(e.pricing.blended, costDec).padStart(6);
-    const tps = e.throughput_p90 != null ? e.throughput_p90.toFixed(tpsDec).padStart(6) : "    —";
-    const bc = FMT.ipp(e.ipp.blndcod, bcDec).padStart(6);
-    const ba = FMT.ipp(e.ipp.blndagnt, baDec).padStart(6);
-    const cc = FMT.ipp(e.ipp.cachcod, ccDec).padStart(6);
-    const ca = FMT.ipp(e.ipp.cachagt, caDec).padStart(6);
-    const ba_ = FMT.ipp(e.ipp.blnd, bDec).padStart(7);
-    const ca_ = FMT.ipp(e.ipp.cach, cDec).padStart(7);
-    const vals = [rank, name, intel, coding, agentic, blended, tps, bc, ba, cc, ca, ba_, ca_];
-    let row = "";
-    for (let i = 0; i < COLS.length; i++) {
-      row += vals[i];
-      if (i < COLS.length - 1) row += SEP;
-    }
-    lines.push(`│ ${row} │`);
-  });
-  lines.push(`└${dash}┘`);
-  return lines.join("\n");
+  return renderTable(
+    [
+      { label: "Rank",   format: (_, i) => String(i + 1).padStart(4), align: "right" },
+      { label: "Model",  format: (e) => {
+        const label = modelLabel(e);
+        return label.length > 40 ? label.slice(0, 38) + "…" : label;
+      } },
+      { label: "Intel",  format: (e) => e.indices.intelligence != null ? e.indices.intelligence.toFixed(0) : "—" },
+      { label: "Coding", format: (e) => e.indices.coding != null ? e.indices.coding.toFixed(0) : "—" },
+      { label: "Agent",  format: (e) => e.indices.agentic != null ? e.indices.agentic.toFixed(0) : "—" },
+      { label: "$M/M",   format: (e) => FMT.cost(e.pricing.blended, costDec) },
+      { label: "p90TPS", format: (e) => e.throughput_p90 != null ? e.throughput_p90.toFixed(tpsDec) : "—" },
+      { label: "BlndCd", format: (e) => e.ipp.blndcod != null ? e.ipp.blndcod.toFixed(bcDec) : "—" },
+      { label: "BlndAg", format: (e) => e.ipp.blndagnt != null ? e.ipp.blndagnt.toFixed(baDec) : "—" },
+      { label: "CachCd", format: (e) => e.ipp.cachcod != null ? e.ipp.cachcod.toFixed(ccDec) : "—" },
+      { label: "CachAg", format: (e) => e.ipp.cachagt != null ? e.ipp.cachagt.toFixed(caDec) : "—" },
+      { label: "BlndAv", format: (e) => e.ipp.blnd != null ? e.ipp.blnd.toFixed(bDec) : "—" },
+      { label: "CachAv", format: (e) => e.ipp.cach != null ? e.ipp.cach.toFixed(cDec) : "—" },
+    ],
+    ranked.slice(0, 20),
+    { sep: " ", titlePrefix }
+  );
 }
 
 export function renderChanges(data: { priorDate: string | null; currentDate: string; added: string[]; removed: string[]; changes: DiffChange[]; } | null) {
@@ -837,64 +887,24 @@ export function renderTPS(entries: ModelEntry[]) {
   const bVals = ranked.map((e) => e.ipp.blnd);
   const bDec = FMT.ippPrecision(bVals, 2);
 
-  // Column spec: width >= max(label.length, valueWidth). "p90 TPS(30m)" (11) and
-  // "Agentic" (7)/"Coding" (6) exceed the value widths, so fields are widened.
-  const SEP = "  ";
-  const COLS: { label: string; w: number }[] = [
-    { label: "Rank",       w: 4  },
-    { label: "Model",      w: 40 },
-    { label: "p90 TPS(30m)", w: 12 },
-    { label: "Base$/M",    w: 7  },
-    { label: "BlndAv",     w: 7  },
-    { label: "Coding",     w: 7  },
-    { label: "Agentic",    w: 7  },
-    { label: "Intel",      w: 5  },
-  ];
-  const widths = COLS.map(c => c.w);
-  const inner = widths.reduce((a, b) => a + b, 0) + SEP.length * (COLS.length - 1);
-  const dash = "─".repeat(inner + 2);
   const titlePrefix = "─ Top Models by p90 Throughput (tokens/sec) ─";
-  const titlePad = "─".repeat(Math.max(0, dash.length - titlePrefix.length));
-
-  // Header: left-align "Rank" & "Model", right-align numeric labels.
-  let header = "";
-  for (let i = 0; i < COLS.length; i++) {
-    const c = COLS[i];
-    const label = String(c.label);
-    const rightAlign = !["Rank", "Model"].includes(c.label);
-    const cell =
-      label.length >= c.w
-        ? label.slice(0, c.w)
-        : rightAlign
-          ? " ".repeat(c.w - label.length) + label
-          : label + " ".repeat(c.w - label.length);
-    header += cell;
-    if (i < COLS.length - 1) header += SEP;
-  }
-
-  const lines: string[] = [];
-  lines.push(`┌${titlePrefix}${titlePad}┐`);
-  lines.push(`│ ${header} │`);
-  lines.push(`│${dash}│`);
-  ranked.slice(0, 20).forEach((e, i) => {
-    const rank = (i + 1).toString().padStart(2);
-    const name = FMT.pad(modelLabel(e).length > 40 ? modelLabel(e).slice(0, 38) + "…" : modelLabel(e), 40);
-    const tps = e.throughput_p90 != null ? e.throughput_p90.toFixed(tpsDec).padStart(7) : "      —";
-    const blended = FMT.cost(e.pricing.blended, costDec).padStart(6);
-    const ba_ = FMT.ipp(e.ipp.blnd, bDec).padStart(7);
-    const coding = e.indices.coding != null ? e.indices.coding.toFixed(0).padStart(7) : "    —  ";
-    const agentic = e.indices.agentic != null ? e.indices.agentic.toFixed(0).padStart(7) : "    —  ";
-    const intel = e.indices.intelligence != null ? e.indices.intelligence.toFixed(0).padStart(5) : "    —";
-    const vals = [rank, name, tps, blended, ba_, coding, agentic, intel];
-    let row = "";
-    for (let i = 0; i < COLS.length; i++) {
-      row += vals[i];
-      if (i < COLS.length - 1) row += SEP;
-    }
-    lines.push(`│ ${row} │`);
-  });
-  lines.push(`└${dash}┘`);
-  return lines.join("\n");
+  return renderTable(
+    [
+      { label: "Rank",       format: (_, i) => String(i + 1).padStart(2), align: "right" },
+      { label: "Model",      format: (e) => {
+        const label = modelLabel(e);
+        return label.length > 40 ? label.slice(0, 38) + "…" : label;
+      } },
+      { label: "p90 TPS(30m)", format: (e) => e.throughput_p90 != null ? e.throughput_p90.toFixed(tpsDec) : "—" },
+      { label: "Base$/M",    format: (e) => FMT.cost(e.pricing.blended, costDec) },
+      { label: "BlndAv",     format: (e) => e.ipp.blnd != null ? e.ipp.blnd.toFixed(bDec) : "—" },
+      { label: "Coding",     format: (e) => e.indices.coding != null ? e.indices.coding.toFixed(0) : "—" },
+      { label: "Agentic",    format: (e) => e.indices.agentic != null ? e.indices.agentic.toFixed(0) : "—" },
+      { label: "Intel",      format: (e) => e.indices.intelligence != null ? e.indices.intelligence.toFixed(0) : "—" },
+    ],
+    ranked.slice(0, 20),
+    { sep: "  ", titlePrefix }
+  );
 }
 
 // ─── Extension Entry Point ──────────────────────────────────────────────────────
@@ -1088,7 +1098,7 @@ export function setupMetrics(pi: ExtensionAPI) {
 
   // ── Command: /or-metrics ──
   pi.registerCommand("or-metrics", {
-    description: "Show OpenRouter ability-per-price and provider-averaged throughput metrics. Args: scoped | notable | top | tps | changes [--cap N] (default cap: $1)",
+    description: "Show OpenRouter ability-per-price and provider-averaged throughput metrics. Args: scoped | notable | top | tps | changes [--cap N] (default cap: $1). Notable raw ability categories display side-by-side: uncapped left vs price-capped right.",
     getArgumentCompletions: (prefix: string): { value: string; label: string }[] | null => {
       const opts = ["scoped", "notable", "top", "tps", "changes"];
       return opts.filter((o) => o.startsWith(prefix)).map((o) => ({ value: o, label: o }));
@@ -1184,7 +1194,7 @@ export function setupMetrics(pi: ExtensionAPI) {
   pi.registerTool({
     name: "or_metrics_query",
     label: "OR Metrics Query",
-    description: "Query OpenRouter ability-per-price metrics for the scoped models or for any tracked model. Use mode='scoped' for our models, mode='top N' for top N by blended IPP, mode='tps' for top models by provider-averaged p90 throughput, mode='find <query>' to search by name, or mode='notable' for analytical highlights (each notable entry includes v (ability score or IPP) and blended_cost ($/M tokens). IPP fields: blndcod (BlndCd), blndagnt (BlndAg), cachcod (CachCd), cachagt (CachAg), blnd (BlndAv), cach (CachAv). TPS field: throughput_p90 (provider-averaged p90 tokens/sec over last 30m). Display uses slugs by default (set OR_METRICS_DISPLAY_MODEL_NAMES=1 to show human-readable names). Optional cap parameter limits the <$N blend-cost supplementary categories (default: 1).",
+    description: "Query OpenRouter ability-per-price metrics for the scoped models or for any tracked model. Use mode='scoped' for our models, mode='top N' for top N by blended IPP, mode='tps' for top models by provider-averaged p90 throughput, mode='find <query>' to search by name, or mode='notable' for analytical highlights. Notable raw ability categories (agentic, coding) are returned as side-by-side pairs with left=uncapped top-5 and right=price-capped top-5. IPP categories (blended, cached) are returned as vertical lists. Each entry includes v (ability score or IPP) and blended_cost ($/M tokens). IPP fields: blndcod (BlndCd), blndagnt (BlndAg), cachcod (CachCd), cachagt (CachAg), blnd (BlndAv), cach (CachAv). TPS field: throughput_p90 (provider-averaged p90 tokens/sec over last 30m). Display uses slugs by default (set OR_METRICS_DISPLAY_MODEL_NAMES=1 to show human-readable names). Optional cap parameter limits the price cap for the capped variation (default: 1).",
     parameters: Type.Object({
       mode: Type.String({ description: "scoped | top N | tps | find <query> | notable" }),
       cap: Type.Optional(Type.Number({ description: "Blend-cost cap in dollars for the <$N supplementary categories (default: 1)" })),
