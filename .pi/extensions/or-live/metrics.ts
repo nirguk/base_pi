@@ -730,66 +730,83 @@ export function renderScoped(scoped: ScopedModelEntry[]) {
   return output;
 }
 
+/**
+ * Render notable model highlights using cli-table3.
+ *
+ * Side-by-side entries (raw vs capped ability) are rendered as
+ * a single 4-column table. Vertical entries (IPP rankings) are
+ * rendered as a 3-column table.
+ */
 export function renderNotable(notable: NotableEntry[]) {
   const lines: string[] = [];
-  const boxWidth = 112;
-  lines.push("┌─ Notable ─".padEnd(boxWidth + 4, "─") + "┐");
+
+  // Title bar — same width as the widest table we produce.
+  const titleBar = "┌─ Notable ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐";
+  lines.push(titleBar);
 
   for (const n of notable) {
     if (n.kind === "sideBySide") {
-      // Side-by-side table: Model | Score ($/M) | Model | Score ($/M)
-      const leftW = 30; // model name column width
-      const scoreW = 16; // score + cost column width
-      const sep = " │ ";
-      const innerWidth = leftW + scoreW + sep.length + leftW + scoreW;
-      const dash = "─".repeat(boxWidth);
+      const head = [n.leftTitle, "Score ($/M)", n.rightTitle, "Score ($/M)"];
+      const table = new Table({
+        head,
+        style: {
+          border: ["─", "│", "┌", "┐", "└", "┘", "┬", "├", "┤", "┴", "┼"],
+          paddingLeft: 1,
+          paddingRight: 1,
+          head: [],
+        },
+        colAligns: ["left", "right", "left", "right"],
+      } as any);
 
-      // Title row
-      lines.push(`│ ${FMT.pad(n.title, boxWidth)} │`);
-
-      // Header row
-      const leftCol1 = FMT.pad(n.leftTitle, leftW);
-      const leftCol2 = FMT.pad("Score ($/M)", scoreW).padStart(scoreW);
-      const rightCol1 = FMT.pad(n.rightTitle, leftW);
-      const rightCol2 = FMT.pad("Score ($/M)", scoreW).padStart(scoreW);
-      const headerRow = leftCol1 + leftCol2 + sep + rightCol1 + rightCol2;
-      lines.push(`│ ${headerRow}${" ".repeat(Math.max(0, boxWidth - headerRow.length))} │`);
-      lines.push(`│${dash}│`);
-
-      // Data rows — pad the shorter list with empty rows
       const maxRows = Math.max(n.leftModels.length, n.rightModels.length);
       for (let i = 0; i < maxRows; i++) {
         const lm = n.leftModels[i];
         const rm = n.rightModels[i];
-
-        const leftName = lm ? FMT.pad(DISPLAY_MODEL_NAMES ? (lm.name || lm.slug) : lm.slug, leftW).slice(0, leftW) : " ".repeat(leftW);
-        const leftScore = lm
-          ? (lm.v > 100 ? lm.v.toFixed(1) : lm.v.toFixed(2)).padStart(scoreW - 1) + " " + FMT.cost(lm.blended_cost) + "/M"
-          : " ".repeat(scoreW);
-        const rightName = rm ? FMT.pad(DISPLAY_MODEL_NAMES ? (rm.name || rm.slug) : rm.slug, leftW).slice(0, leftW) : " ".repeat(leftW);
-        const rightScore = rm
-          ? (rm.v > 100 ? rm.v.toFixed(1) : rm.v.toFixed(2)).padStart(scoreW - 1) + " " + FMT.cost(rm.blended_cost) + "/M"
-          : " ".repeat(scoreW);
-
-        const row = leftName + leftScore + sep + rightName + rightScore;
-        lines.push(`│ ${row}${" ".repeat(Math.max(0, boxWidth - row.length))} │`);
+        const leftName = lm ? (DISPLAY_MODEL_NAMES ? (lm.name || lm.slug) : lm.slug) : "";
+        const leftScore = lm ? (lm.v > 100 ? lm.v.toFixed(1) : lm.v.toFixed(2)) + " " + FMT.cost(lm.blended_cost) + "/M" : "";
+        const rightName = rm ? (DISPLAY_MODEL_NAMES ? (rm.name || rm.slug) : rm.slug) : "";
+        const rightScore = rm ? (rm.v > 100 ? rm.v.toFixed(1) : rm.v.toFixed(2)) + " " + FMT.cost(rm.blended_cost) + "/M" : "";
+        table.push([leftName, leftScore, rightName, rightScore]);
       }
 
-      lines.push(`│${dash}│`);
+      let output = table.toString();
+      // Prepend the section title as the first line.
+      const sectionLine = `│ ${n.title}`;
+      output = [sectionLine, ...output.split("\n").slice(1)].join("\n");
+      lines.push(output);
     } else {
-      // Vertical entry — same as before
-      lines.push(`│ ${FMT.pad(n.category, boxWidth)} │`);
+      // Vertical entry
+      const head = ["Model", "Score", "Cost/M"];
+      const table = new Table({
+        head,
+        style: {
+          border: ["─", "│", "┌", "┐", "└", "┘", "┬", "├", "┤", "┴", "┼"],
+          paddingLeft: 1,
+          paddingRight: 1,
+          head: [],
+        },
+        colAligns: ["left", "right", "right"],
+      } as any);
+
       for (const m of n.models) {
         const displayName = DISPLAY_MODEL_NAMES ? (m.name || "") : (m.slug || m.name || "");
-        const name = FMT.pad(displayName, 40).slice(0, 40);
-        const v = typeof m.v === "number" ? (m.v > 100 ? m.v.toFixed(1) : m.v.toFixed(2).padStart(6)) : String(m.v ?? "—");
+        const v = typeof m.v === "number" ? (m.v > 100 ? m.v.toFixed(1) : m.v.toFixed(2)) : "—";
         const cost = FMT.cost(m.blended_cost);
-        lines.push(`│   ${name}  ${v}  ${cost}${" ".repeat(Math.max(0, 62 - String(v).length - cost.length))} │`);
+        table.push([displayName, v, cost]);
       }
-      lines.push(`│─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│`);
+
+      let output = table.toString();
+      const sectionLine = `│ ${n.category}`;
+      output = [sectionLine, ...output.split("\n").slice(1)].join("\n");
+      lines.push(output);
+
+      // Separator line
+      const sepLine = "│" + "─".repeat(112) + "│";
+      lines.push(sepLine);
     }
   }
-  lines.push("└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘");
+
+  lines.push("└" + "─".repeat(112) + "┘");
   return lines.join("\n");
 }
 
@@ -840,12 +857,18 @@ export function renderTop(entries: ModelEntry[]) {
   );
 }
 
+/**
+ * Render snapshot diff using cli-table3 for the changes list.
+ */
 export function renderChanges(data: { priorDate: string | null; currentDate: string; added: string[]; removed: string[]; changes: DiffChange[]; } | null) {
   if (!data.priorDate) {
     return "No prior snapshot yet. Run /or-metrics a second time later to see changes.";
   }
   const lines: string[] = [];
-  lines.push(`┌─ Changes since ${data.priorDate} ───────────────────────────────────────────────────────────────────────────────────┐`);
+
+  // Header
+  const headerLine = `┌─ Changes since ${data.priorDate} ───────────────────────────────────────────────────────────────────────────────────┐`;
+  lines.push(headerLine);
 
   if (!data.added.length && !data.removed.length && !data.changes.length) {
     lines.push(`│ ✓ No changes. (${data.currentDate})`);
@@ -855,10 +878,27 @@ export function renderChanges(data: { priorDate: string | null; currentDate: str
 
   if (data.added.length > 0) {
     lines.push(`│ 🆕  New models (${data.added.length}):`);
+    // Use cli-table3 for the 3-column layout
+    const table = new Table({
+      head: [],
+      style: {
+        border: [" ", " ", " ", " ", " ", " ", " ", " ", " ", " ", " "],
+        paddingLeft: 0,
+        paddingRight: 0,
+        head: [],
+      },
+      colWidths: [40, 40, 40],
+    } as any);
     const names = data.added.slice(0, 12);
     for (let i = 0; i < names.length; i += 3) {
-      const row = names.slice(i, i + 3).map((n: string) => n.padEnd(40).slice(0, 40)).join("");
-      lines.push(`│    ${row}`);
+      const row = names.slice(i, i + 3);
+      while (row.length < 3) row.push("");
+      table.push(row);
+    }
+    // Prefix each data row with "│    "
+    const tableOut = table.toString();
+    for (const l of tableOut.split("\n")) {
+      lines.push(`│    ${l}`);
     }
     if (data.added.length > 12) lines.push(`│    … and ${data.added.length - 12} more`);
   }
@@ -868,13 +908,28 @@ export function renderChanges(data: { priorDate: string | null; currentDate: str
   if (data.changes.length > 0) {
     lines.push(`│ 📊  Changes (${data.changes.length}):`);
     const sorted = [...data.changes].sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+    // Use cli-table3 for the changes table
+    const table = new Table({
+      head: ["Model", "Change"],
+      style: {
+        border: ["─", "│", "┌", "┐", "└", "┘", "┬", "├", "┤", "┴", "┼"],
+        paddingLeft: 1,
+        paddingRight: 1,
+        head: [],
+      },
+      colAligns: ["left", "left"],
+    } as any);
     for (const c of sorted.slice(0, 12)) {
       const arrow = c.delta > 0 ? "↑" : "↓";
-      const val = c.metric === "price" 
-        ? `${arrow}${Math.abs(c.delta).toFixed(1)}% (${FMT.cost(c.old)} → ${FMT.cost(c.new)})`
+      const val = c.metric === "price"
+        ? `${arrow}${Math.abs(c.delta).toFixed(1)}% (${FMT.cost(c.old)} → ${FMT.cost(c.new)})${c.metric === "price" ? "" : ""}`
         : `${arrow}${Math.abs(c.delta).toFixed(1)}pt (${c.old} → ${c.new})`;
       const displayLabel = DISPLAY_MODEL_NAMES ? c.name : c.slug;
-      lines.push(`│    ${FMT.pad(displayLabel, 40)} ${val}`);
+      table.push([displayLabel, val]);
+    }
+    const tableOut = table.toString();
+    for (const l of tableOut.split("\n")) {
+      lines.push(`│ ${l}`);
     }
     if (data.changes.length > 12) lines.push(`│    … and ${data.changes.length - 12} more`);
   }
