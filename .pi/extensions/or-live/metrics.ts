@@ -22,6 +22,7 @@
  *   /or-metrics top       — top 20 by blended IPP
  *   /or-metrics tps       — top models by provider-averaged p90 throughput (tokens/sec, 30m window)
  *   /or-metrics changes   — diff since last snapshot
+ *   /or-metrics --all     — include free models (slug contains :free) in the display
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -225,6 +226,19 @@ const DISPLAY_MODEL_NAMES =
 /** Return the display label for a model entry: slug (default) or name. */
 function modelLabel(e: ModelEntry): string {
   return DISPLAY_MODEL_NAMES ? (e.name || e.slug) : e.slug;
+}
+
+/** Return true when the model slug contains `:free` (a free-tier model). */
+function isFreeModel(e: ModelEntry): boolean {
+  return e.slug.includes(":free");
+}
+
+/**
+ * Return entries with free models excluded by default.
+ * Pass `includeFree = true` to keep them.
+ */
+function filterModels(entries: ModelEntry[], includeFree: boolean): ModelEntry[] {
+  return includeFree ? entries : entries.filter((e) => !isFreeModel(e));
 }
 
 // Populated from ctx.scopedModels at session start
@@ -1098,7 +1112,7 @@ export function setupMetrics(pi: ExtensionAPI) {
 
   // ── Command: /or-metrics ──
   pi.registerCommand("or-metrics", {
-    description: "Show OpenRouter ability-per-price and provider-averaged throughput metrics. Args: scoped | notable | top | tps | changes [--cap N] (default cap: $1). Notable raw ability categories display side-by-side: uncapped left vs price-capped right.",
+    description: "Show OpenRouter ability-per-price and provider-averaged throughput metrics. Args: scoped | notable | top | tps | changes [--cap N] [--all] (default cap: $1). Free models (slug contains ':free') are excluded by default; use --all to include them. Notable raw ability categories display side-by-side: uncapped left vs price-capped right.",
     getArgumentCompletions: (prefix: string): { value: string; label: string }[] | null => {
       const opts = ["scoped", "notable", "top", "tps", "changes"];
       return opts.filter((o) => o.startsWith(prefix)).map((o) => ({ value: o, label: o }));
@@ -1121,11 +1135,12 @@ export function setupMetrics(pi: ExtensionAPI) {
       }
       if (!cachedEntries) return; // refresh already notified
 
-      // Parse --cap N from args (e.g. "/or-metrics notable --cap 3")
+      // Parse --cap N and --all from args (e.g. "/or-metrics notable --cap 3 --all")
       const capMatch = args.match(/--cap\s+(\d+(?:\.\d+)?)/);
       const cap = capMatch ? parseFloat(capMatch[1]) : 1;
-      // Strip --cap N from args so the mode parsing is unaffected
-      const mode = args.replace(/--cap\s+\S+\s*/, "").trim().toLowerCase();
+      const includeFree = args.includes("--all");
+      // Strip flags from args so the mode parsing is unaffected
+      const mode = args.replace(/--cap\s+\S+\s*/, "").replace(/--all\s*/, "").trim().toLowerCase();
 
       // For tps mode, wait for background fetch to complete if running
       if (mode === "tps" && tpsFetchInProgress && tpsFetchPromise) {
@@ -1152,20 +1167,26 @@ export function setupMetrics(pi: ExtensionAPI) {
         setModelBenchmarkTPS(e.slug, cachedTPSData[e.slug] ?? null);
       }
 
-      const notable = findNotable(cachedEntries, cap);
+      const displayEntries = filterModels(cachedEntries, includeFree);
+      const freeCount = cachedEntries.filter(isFreeModel).length;
+      const notable = findNotable(displayEntries, cap);
       const lines: string[] = [];
       const caption = cap === 1
-        ? `Models with AA data: ${cachedEntries.length} · cache rate: ${(DEFAULT_CACHE_RATE * 100).toFixed(0)}%`
-        : `Models with AA data: ${cachedEntries.length} · cache rate: ${(DEFAULT_CACHE_RATE * 100).toFixed(0)} · blend-cost cap: <$${cap}`;
+        ? `Models with AA data: ${displayEntries.length} · cache rate: ${(DEFAULT_CACHE_RATE * 100).toFixed(0)}%`
+        : `Models with AA data: ${displayEntries.length} · cache rate: ${(DEFAULT_CACHE_RATE * 100).toFixed(0)} · blend-cost cap: <$${cap}`;
+      if (!includeFree && freeCount > 0) {
+        lines.push(`💡 ${freeCount} free model(s) excluded by default. Run /or-metrics --all to include them.`);
+        lines.push("");
+      }
 
       if (mode === "scoped") {
         lines.push(renderScoped(cachedScoped!));
       } else if (mode === "notable") {
         lines.push(renderNotable(notable));
       } else if (mode === "top") {
-        lines.push(renderTop(cachedEntries));
+        lines.push(renderTop(displayEntries));
       } else if (mode === "tps") {
-        lines.push(renderTPS(cachedEntries));
+        lines.push(renderTPS(displayEntries));
       } else if (mode === "changes") {
         lines.push(renderChanges(cachedChanges!));
       } else {
@@ -1177,9 +1198,9 @@ export function setupMetrics(pi: ExtensionAPI) {
         lines.push("");
         lines.push(renderNotable(notable));
         lines.push("");
-        lines.push(renderTop(cachedEntries));
+        lines.push(renderTop(displayEntries));
         lines.push("");
-        lines.push(renderTPS(cachedEntries));
+        lines.push(renderTPS(displayEntries));
         if (cachedChanges?.priorDate) {
           lines.push("");
           lines.push(renderChanges(cachedChanges));
@@ -1194,10 +1215,11 @@ export function setupMetrics(pi: ExtensionAPI) {
   pi.registerTool({
     name: "or_metrics_query",
     label: "OR Metrics Query",
-    description: "Query OpenRouter ability-per-price metrics for the scoped models or for any tracked model. Use mode='scoped' for our models, mode='top N' for top N by blended IPP, mode='tps' for top models by provider-averaged p90 throughput, mode='find <query>' to search by name, or mode='notable' for analytical highlights. Notable raw ability categories (agentic, coding) are returned as side-by-side pairs with left=uncapped top-5 and right=price-capped top-5. IPP categories (blended, cached) are returned as vertical lists. Each entry includes v (ability score or IPP) and blended_cost ($/M tokens). IPP fields: blndcod (BlndCd), blndagnt (BlndAg), cachcod (CachCd), cachagt (CachAg), blnd (BlndAv), cach (CachAv). TPS field: throughput_p90 (provider-averaged p90 tokens/sec over last 30m). Display uses slugs by default (set OR_METRICS_DISPLAY_MODEL_NAMES=1 to show human-readable names). Optional cap parameter limits the price cap for the capped variation (default: 1).",
+    description: "Query OpenRouter ability-per-price metrics for the scoped models or for any tracked model. Use mode='scoped' for our models, mode='top N' for top N by blended IPP, mode='tps' for top models by provider-averaged p90 throughput, mode='find <query>' to search by name, or mode='notable' for analytical highlights. Notable raw ability categories (agentic, coding) are returned as side-by-side pairs with left=uncapped top-5 and right=price-capped top-5. IPP categories (blended, cached) are returned as vertical lists. Each entry includes v (ability score or IPP) and blended_cost ($/M tokens). IPP fields: blndcod (BlndCd), blndagnt (BlndAg), cachcod (CachCd), cachagt (CachAg), blnd (BlndAv), cach (CachAv). TPS field: throughput_p90 (provider-averaged p90 tokens/sec over last 30m). Display uses slugs by default (set OR_METRICS_DISPLAY_MODEL_NAMES=1 to show human-readable names). Optional cap parameter limits the price cap for the capped variation (default: 1). Free models (slug contains ':free') are excluded by default; set all=true to include them.",
     parameters: Type.Object({
       mode: Type.String({ description: "scoped | top N | tps | find <query> | notable" }),
       cap: Type.Optional(Type.Number({ description: "Blend-cost cap in dollars for the <$N supplementary categories (default: 1)" })),
+      all: Type.Optional(Type.Boolean({ description: "Include free models (slug contains ':free') that are excluded by default" })),
     }),
     async execute(
       toolCallId: string,
@@ -1221,7 +1243,9 @@ export function setupMetrics(pi: ExtensionAPI) {
       }
 
       const mode = (params.mode || "").toLowerCase().trim();
-      const result: { n_tracked: number; timestamp: string; scoped?: unknown; rankings?: unknown; matches?: unknown; tps_rankings?: unknown; notable?: unknown; error?: string; note?: string } = { n_tracked: cachedEntries.length, timestamp: new Date().toISOString() };
+      const includeFree = params.all === true;
+      const toolEntries = filterModels(cachedEntries, includeFree);
+      const result: { n_tracked: number; timestamp: string; scoped?: unknown; rankings?: unknown; matches?: unknown; tps_rankings?: unknown; notable?: unknown; error?: string; note?: string } = { n_tracked: toolEntries.length, timestamp: new Date().toISOString() };
 
       if (mode === "scoped" || mode.startsWith("scoped")) {
         result.scoped = cachedScoped!.map((s) => {
@@ -1239,7 +1263,7 @@ export function setupMetrics(pi: ExtensionAPI) {
         });
       } else if (mode.startsWith("top")) {
         const n = parseInt(mode.replace("top", "").trim()) || 10;
-        const ranked = [...cachedEntries].filter((e) => e.ipp.blnd != null)
+        const ranked = [...toolEntries].filter((e) => e.ipp.blnd != null)
           .sort((a, b) => (b.ipp.blnd || 0) - (a.ipp.blnd || 0))
           .slice(0, Math.min(n, 50));
         result.rankings = ranked.map((e) => ({
@@ -1253,7 +1277,7 @@ export function setupMetrics(pi: ExtensionAPI) {
         }));
       } else if (mode.startsWith("find")) {
         const q = mode.replace("find", "").trim().toLowerCase();
-        const matches = cachedEntries.filter((e) => e.name.toLowerCase().includes(q) || e.slug.toLowerCase().includes(q));
+        const matches = toolEntries.filter((e) => e.name.toLowerCase().includes(q) || e.slug.toLowerCase().includes(q));
         result.matches = matches.slice(0, 10).map((e) => ({
           slug: e.slug,
           name: e.name,
@@ -1265,7 +1289,7 @@ export function setupMetrics(pi: ExtensionAPI) {
         }));
         if (matches.length === 0) result.note = `No matches for "${q}"`;
       } else if (mode === "tps") {
-        const ranked = [...cachedEntries]
+        const ranked = [...toolEntries]
           .map((e) => ({ ...e, _tps: cachedTPSData[e.slug] ?? null }))
           .filter((e) => e._tps != null)
           .sort((a, b) => (b._tps || 0) - (a._tps || 0))
@@ -1279,7 +1303,7 @@ export function setupMetrics(pi: ExtensionAPI) {
           ipp: e.ipp,
         }));
       } else if (mode === "notable") {
-        result.notable = findNotable(cachedEntries, params.cap ?? 1);
+        result.notable = findNotable(toolEntries, params.cap ?? 1);
       } else {
         result.error = `Unknown mode: ${mode}. Use: scoped, top N, tps, find <query>, notable`;
       }
