@@ -1,19 +1,17 @@
 {
   "providers": {
     "openrouter": {
-      "compat": {
-        "openRouterRouting": {
-          "allow_fallbacks": true,
-          "preferred_min_throughput": { "p90": 60 },
-          "preferred_max_latency": { "p90": 3 }
-        }
-      },
       "modelOverrides": {
-        "inclusionai/ling-3.0-flash": {
-          "compat": {
-            "openRouterRouting": {
-              "order": ["novita"]
-            }
+        "deepseek/deepseek-v4-flash-0731": {
+          "maxTokens": 1750,
+          "thinkingLevelMap": {
+            "off": "none",
+            "low": "low",
+            "minimal": null,
+            "medium": null,
+            "high": "high",
+            "xhigh": null,
+            "max": null
           }
         }
       }
