@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   averageEndpointThroughput,
   clearModelBenchmarkTPS,
+  getModelBenchmarkTPS,
   setModelBenchmarkTPS,
 } from "../throughput";
 import {
@@ -46,6 +47,12 @@ describe("rolling provider TPS", () => {
 
     expect(getProviderRollingTPS("acme/model", "Provider A", now)).toBeCloseTo(6.667, 2);
     expect(getProviderRollingTPS("acme/model", "Provider A", now + 60 * 60 * 1000 + 1)).toBeNull();
+  });
+
+  it("retains the benchmark value when passed null instead of clearing it", () => {
+    setModelBenchmarkTPS("acme/model", 20);
+    setModelBenchmarkTPS("acme/model", null);
+    expect(getModelBenchmarkTPS("acme/model")).toBe(20);
   });
 
   it("shows observed and model-average TPS with a performance arrow", () => {
