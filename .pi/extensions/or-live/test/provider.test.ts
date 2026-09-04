@@ -200,7 +200,7 @@ describe("after_provider_response integration", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(setStatus).toHaveBeenCalledWith(
       "openrouter-provider",
-      "Provider:DigitalOcean · TPS30m:— / OR30m:— ;",
+      "Provider:DigitalOcean ;",
     );
   });
 
@@ -237,7 +237,7 @@ describe("after_provider_response integration", () => {
     expect(options.headers).toEqual({ Authorization: "Bearer test-key" });
     expect(setStatus).toHaveBeenCalledWith(
       "openrouter-provider",
-      "Provider:DigitalOcean · TPS30m:— / OR30m:— ;",
+      "Provider:DigitalOcean ;",
     );
   });
 });
