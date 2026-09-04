@@ -1069,8 +1069,10 @@ export function setupMetrics(pi: ExtensionAPI) {
 
         await Promise.all(batch.map(async (slug: string) => {
           const tp = await fetchEndpointTPS(apiKey, slug);
-          cachedTPSData[slug] = tp?.p90 ?? null;
-          setModelBenchmarkTPS(slug, cachedTPSData[slug]);
+          if (tp?.p90 != null) {
+            cachedTPSData[slug] = tp.p90;
+            setModelBenchmarkTPS(slug, tp.p90);
+          }
           completed++;
         }));
 
@@ -1130,7 +1132,9 @@ export function setupMetrics(pi: ExtensionAPI) {
         if (e.throughput_p90 != null && cachedTPSData[e.slug] == null) {
           cachedTPSData[e.slug] = e.throughput_p90;
         }
-        setModelBenchmarkTPS(e.slug, cachedTPSData[e.slug] ?? null);
+        if (cachedTPSData[e.slug] != null) {
+          setModelBenchmarkTPS(e.slug, cachedTPSData[e.slug]);
+        }
       }
 
       // Start background TPS fetch (don't await — let it run concurrently)
@@ -1241,7 +1245,9 @@ export function setupMetrics(pi: ExtensionAPI) {
         if (cachedTPSData[e.slug] != null) {
           e.throughput_p90 = cachedTPSData[e.slug];
         }
-        setModelBenchmarkTPS(e.slug, cachedTPSData[e.slug] ?? null);
+        if (cachedTPSData[e.slug] != null) {
+          setModelBenchmarkTPS(e.slug, cachedTPSData[e.slug]);
+        }
       }
 
       const displayEntries = filterModels(cachedEntries, includeFree);

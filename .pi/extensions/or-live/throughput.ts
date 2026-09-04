@@ -63,10 +63,13 @@ export function getModelBenchmarkTPS(slug: string): number | null {
 export function setModelBenchmarkTPS(slug: string, value: number | null): void {
   const previous = getModelBenchmarkTPS(slug);
   if (value == null || !Number.isFinite(value) || value < 0) {
-    modelBenchmarkTPS.delete(slug);
-  } else {
-    modelBenchmarkTPS.set(slug, value);
+    // Keep the existing value instead of deleting — null means "no new
+    // data available right now," not "the benchmark is gone."  This
+    // prevents the OR30m display from flickering in and out when endpoint
+    // TPS data is temporarily unavailable for a model.
+    return;
   }
+  modelBenchmarkTPS.set(slug, value);
   const next = getModelBenchmarkTPS(slug);
   if (previous !== next) {
     for (const listener of benchmarkListeners) {
