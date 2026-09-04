@@ -479,13 +479,14 @@ function startResponseMeasurement(generationId: string, ctx: ProviderHandlerCtx,
 
 function findMeasurementForMessage(ctx: ProviderHandlerCtx, generationId?: string): ResponseMeasurement | undefined {
   const slug = ctx.model?.id;
+  if (!slug) return undefined;
   for (const measurement of responseMeasurements.values()) {
     if (measurement.completedAt) continue;
     if (generationId) {
       if (measurement.generationId === generationId) return measurement;
       continue;
     }
-    if (slug && measurement.slug === slug) return measurement;
+    if (measurement.slug === slug) return measurement;
   }
   return undefined;
 }
@@ -918,9 +919,13 @@ async function flushPendingGenerationLookups(
 // ─── Extension Entry Point ──────────────────────────────────────────────
 
 let unsubscribeBenchmarkUpdates: (() => void) | undefined;
+/** Shared across setupProvider re-entries so stale callbacks from a
+ *  previous session don't update the wrong footer state. */
+let currentProviderStatus: ProviderStatusRef | null = null;
 
 export function setupProvider(pi: ExtensionAPI) {
-  let currentProviderStatus: ProviderStatusRef | null = null;
+  // Reset provider status on re-entry so the new session starts clean.
+  currentProviderStatus = null;
 
   // Register configurable history window / prior-limit as CLI flags.
   try { pi.registerFlag?.("or-provider-history-window", { description: "History window (ms) for prior providers shown dimmed in the footer", type: "number", default: DEFAULT_HISTORY_WINDOW_MS }); }

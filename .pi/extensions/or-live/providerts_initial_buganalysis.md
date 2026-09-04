@@ -1,11 +1,11 @@
 # Bug Analysis — provider.ts
 
-## Still present — high severity
+## Fixed
 
-| # | Issue | Recommendation |
-|---|-------|----------------|
-| **#4** | `findMeasurementForMessage` returns wrong match when `slug` is falsy — returns first incomplete measurement for **any** model instead of `undefined` | Return `undefined` when `slug` is missing; don't match across models |
-| **#50** | `unsubscribeBenchmarkUpdates` is a local variable in `setupProvider` — leaked on re-entry, causing stale callbacks and wrong `currentProviderStatus` | Store the unsubscribe function at module level and call it before assigning a new one |
+| # | Issue | Fix |
+|---|-------|-----|
+| **#4** | `findMeasurementForMessage` returned wrong match when `slug` was falsy — matched across models instead of returning `undefined` | Added early `if (!slug) return undefined` guard; removed the `slug &&` short-circuit that allowed cross-model matching |
+| **#50** | `unsubscribeBenchmarkUpdates` and `currentProviderStatus` were local to `setupProvider`, leaked on re-entry causing stale callbacks and wrong footer state | Moved both to module level; `setupProvider` now resets `currentProviderStatus = null` on re-entry; `session_shutdown` already resets it |
 
 ## Still present — medium severity
 

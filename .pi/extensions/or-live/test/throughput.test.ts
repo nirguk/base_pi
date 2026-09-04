@@ -61,6 +61,7 @@ describe("rolling provider TPS", () => {
   it("updates the footer after provider lookup and response completion", async () => {
     let clock = 10_000;
     vi.spyOn(Date, "now").mockImplementation(() => clock);
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
