@@ -47,6 +47,15 @@ import {
   subscribeModelBenchmarkTPS,
 } from "./throughput";
 
+// ─── Monotonic clock ──────────────────────────────────────────────────────
+
+/** Base offset so monotonicNow() is comparable to Date.now() at module load. */
+const monotonicBase = Date.now() - performance.now();
+/** Monotonic time in ms (immune to system clock adjustments). */
+function monotonicNow(): number {
+  return performance.now() + monotonicBase;
+}
+
 // ─── Constants ──────────────────────────────────────────────────────────
 
 /** Header name used to opt in to provider metadata in the response body. */
@@ -281,7 +290,7 @@ export function recordObservedProvider(slug: string, providerName: string, compl
   pruneObservedProvidersIfNeeded(slug);
 }
 
-export function pruneObservedProviders(slug: string, now = Date.now(), windowMs = historyWindowMs): void {
+export function pruneObservedProviders(slug: string, now = monotonicNow(), windowMs = historyWindowMs): void {
   const cutoff = now - windowMs;
   const providers = observedProviders.get(slug);
   if (!providers) return;
@@ -299,7 +308,7 @@ function providerTPSKey(slug: string, providerName: string): string {
   return `${slug}\u0000${providerName}`;
 }
 
-function pruneTPSObservations(now = Date.now()): void {
+function pruneTPSObservations(now = monotonicNow()): void {
   const cutoff = now - ROLLING_TPS_WINDOW_MS;
   for (const [key, observations] of providerTPSObservations) {
     const recent = observations.filter((sample) => sample.completedAt >= cutoff);
@@ -340,9 +349,13 @@ export function recordProviderTPS(
   providerName: string,
   outputTokens: number,
   durationMs: number,
-  completedAt = Date.now(),
+  completedAt = monotonicNow(),
 ): boolean {
-  if (!slug || !providerName || !Number.isFinite(outputTokens) || outputTokens <= 0 ||
+  if (!slug || typeof slug !== "string" || slug.trim().length === 0) {
+    log("recordProviderTPS skipped: invalid slug", { slug });
+    return false;
+  }
+  if (!providerName || !Number.isFinite(outputTokens) || outputTokens <= 0 ||
       !Number.isFinite(durationMs) || durationMs <= 0) {
     log("recordProviderTPS skipped: invalid input", { slug, providerName, outputTokens, durationMs });
     return false;
@@ -363,7 +376,7 @@ export function recordProviderTPS(
 export function getProviderRollingTPS(
   slug: string,
   providerName: string,
-  now = Date.now(),
+  now = monotonicNow(),
 ): number | null {
   pruneTPSObservations(now);
   const observations = providerTPSObservations.get(providerTPSKey(slug, providerName));
@@ -441,10 +454,10 @@ export function formatProviderTPSStatusWithCtx(
 function startResponseMeasurement(generationId: string, ctx: ProviderHandlerCtx, orSlug?: string | null): void {
   const slug = orSlug ?? ctx.model?.id;
   if (!slug) return;
-  responseMeasurements.set(generationId, { generationId, slug, requestStartedAt: Date.now() });
+  responseMeasurements.set(generationId, { generationId, slug, requestStartedAt: monotonicNow() });
   // Proactively prune stale entries on every insertion so the map
   // doesn't grow unboundedly across a long-running session.
-  const cutoff = Date.now() - ROLLING_TPS_WINDOW_MS;
+  const cutoff = monotonicNow() - ROLLING_TPS_WINDOW_MS;
   for (const [key, measurement] of responseMeasurements) {
     if (measurement.requestStartedAt < cutoff) responseMeasurements.delete(key);
   }
@@ -472,7 +485,7 @@ function findMeasurementForMessage(ctx: ProviderHandlerCtx, generationId?: strin
       if (measurement.generationId === generationId) return measurement;
       continue;
     }
-    if (!slug || measurement.slug === slug) return measurement;
+    if (slug && measurement.slug === slug) return measurement;
   }
   return undefined;
 }
@@ -522,7 +535,7 @@ const pendingLookupSlugs = new Map<number, string>();
 export function getCachedProvider(generationId: string): string | null {
   const entry = generationCache.get(generationId);
   if (!entry) return null;
-  if (Date.now() - entry.fetchedAt > CACHE_TTL_MS) {
+  if (monotonicNow() - entry.fetchedAt > CACHE_TTL_MS) {
     generationCache.delete(generationId);
     return null;
   }
@@ -573,12 +586,18 @@ export function formatProviderStatusWithCtx(
 }
 
 export function setCachedProvider(generationId: string, providerName: string): void {
+  // Proactively remove stale entries before inserting so the cache
+  // does not grow unboundedly across a long-running session.
+  const cutoff = monotonicNow() - CACHE_TTL_MS;
+  for (const [key, entry] of generationCache) {
+    if (entry.fetchedAt < cutoff) generationCache.delete(key);
+  }
   // FIFO eviction when cache exceeds MAX_CACHE_SIZE.
   if (generationCache.size >= MAX_CACHE_SIZE) {
     const oldestKey = generationCache.keys().next().value;
     if (oldestKey !== undefined) generationCache.delete(oldestKey);
   }
-  generationCache.set(generationId, { providerName, fetchedAt: Date.now() });
+  generationCache.set(generationId, { providerName, fetchedAt: monotonicNow() });
 }
 
 export function clearCache(): void {
@@ -638,6 +657,9 @@ export function getProviderName(data: GenerationRecord): string | undefined {
 
 /** Build the documented generation lookup URL. */
 export function getGenerationUrl(generationId: string): URL {
+  if (!generationId || typeof generationId !== "string" || !generationId.trim()) {
+    throw new TypeError(`Invalid generation ID: ${String(generationId)}`);
+  }
   const url = new URL(GENERATION_ENDPOINT);
   url.searchParams.set("id", generationId);
   return url;
@@ -696,6 +718,17 @@ export async function fetchGenerationRecord(
     onRetry?.(attempt + 1, delayMs, response.status);
     await waitForRetry(delayMs, signal);
   }
+}
+
+/** Check whether a response contains JSON content. */
+function isJsonResponse(response: Response): boolean {
+  const contentType = typeof response.headers?.get === "function"
+    ? (response.headers.get("content-type") ?? "")
+    : "";
+  // If no content-type is set, assume JSON for backward compatibility.
+  // Only reject responses that explicitly declare a non-JSON type.
+  if (!contentType) return true;
+  return contentType.includes("application/json");
 }
 
 /** Guard: true only when the request is going to OpenRouter. */
@@ -771,6 +804,17 @@ async function lookupAndDisplayProvider(
           ctx.ui.setStatus("openrouter-provider", lastKnownProviderText ?? undefined);
           ctx.ui.notify(
             `openrouter-provider-status: generation record fetch failed (${res.status}${res.statusText ? ` ${res.statusText}` : ""})`,
+            "warning",
+          );
+        }
+        return;
+      }
+
+      if (!isJsonResponse(res)) {
+        if (sequence === latestGenerationSequence) {
+          ctx.ui.setStatus("openrouter-provider", lastKnownProviderText ?? undefined);
+          ctx.ui.notify(
+            `openrouter-provider-status: generation record fetch returned non-JSON response (content-type: ${res.headers.get("content-type") ?? "unknown"})`,
             "warning",
           );
         }
@@ -873,23 +917,25 @@ async function flushPendingGenerationLookups(
 
 // ─── Extension Entry Point ──────────────────────────────────────────────
 
+let unsubscribeBenchmarkUpdates: (() => void) | undefined;
+
 export function setupProvider(pi: ExtensionAPI) {
   let currentProviderStatus: ProviderStatusRef | null = null;
 
   // Register configurable history window / prior-limit as CLI flags.
   try { pi.registerFlag?.("or-provider-history-window", { description: "History window (ms) for prior providers shown dimmed in the footer", type: "number", default: DEFAULT_HISTORY_WINDOW_MS }); }
-  catch { /* registerFlag may not exist on the test mock */ }
+  catch (e) { if (!(e instanceof TypeError)) throw e; }
   try { pi.registerFlag?.("or-provider-prior-limit", { description: "Max prior providers shown dimmed in the footer", type: "number", default: DEFAULT_PRIOR_LIMIT }); }
-  catch { /* registerFlag may not exist on the test mock */ }
+  catch (e) { if (!(e instanceof TypeError)) throw e; }
   try { setHistoryWindowMs(pi.getFlag?.("or-provider-history-window") ?? DEFAULT_HISTORY_WINDOW_MS); }
-  catch { /* getFlag may not exist on the test mock */ }
+  catch (e) { if (!(e instanceof TypeError)) throw e; }
   try { setPriorLimit(pi.getFlag?.("or-provider-prior-limit") ?? DEFAULT_PRIOR_LIMIT); }
-  catch { /* getFlag may not exist on the test mock */ }
+  catch (e) { if (!(e instanceof TypeError)) throw e; }
 
   // If OR-metrics finishes its background endpoint fetch after a response,
   // refresh the same footer immediately instead of waiting for another turn.
   // Unsubscribe any previous subscription to prevent leaks on re-entry.
-  let unsubscribeBenchmarkUpdates: (() => void) | undefined;
+  unsubscribeBenchmarkUpdates?.();
   unsubscribeBenchmarkUpdates = subscribeModelBenchmarkTPS((slug) => {
     if (currentProviderStatus?.slug !== slug) return;
     pruneObservedProviders(slug);
@@ -1030,7 +1076,7 @@ export function setupProvider(pi: ExtensionAPI) {
     // about concurrent streams for the same model.
     const measurement = findMeasurementForMessage(ctx);
     if (measurement && measurement.streamStartedAt == null) {
-      measurement.streamStartedAt = Date.now();
+      measurement.streamStartedAt = monotonicNow();
     }
   });
 
@@ -1038,7 +1084,7 @@ export function setupProvider(pi: ExtensionAPI) {
     if (event.message?.role !== "assistant" || !isOpenRouterRequest(ctx)) return;
     const measurement = findMeasurementForMessage(ctx);
     if (!measurement) return;
-    measurement.completedAt = Date.now();
+    measurement.completedAt = monotonicNow();
     const output = event.message.usage?.output;
     measurement.outputTokens = typeof output === "number" ? output : undefined;
     recordCompletedMeasurement(measurement);
@@ -1098,7 +1144,7 @@ export function setupProvider(pi: ExtensionAPI) {
       }
       // Offer cached generation IDs as completions.
       const cached = Array.from(generationCache.entries())
-        .filter(([, entry]) => Date.now() - entry.fetchedAt <= CACHE_TTL_MS)
+        .filter(([, entry]) => monotonicNow() - entry.fetchedAt <= CACHE_TTL_MS)
         .map(([id]) => id);
       if (prefix && cached.length > 0) {
         const matches = cached.filter((id) => id.startsWith(prefix));
@@ -1135,7 +1181,7 @@ export function setupProvider(pi: ExtensionAPI) {
       // If no argument, show the last cached provider.
       if (!trimmed) {
         const entries = Array.from(generationCache.entries()).filter(
-          ([, entry]) => Date.now() - entry.fetchedAt <= CACHE_TTL_MS,
+          ([, entry]) => monotonicNow() - entry.fetchedAt <= CACHE_TTL_MS,
         );
         if (entries.length === 0) {
           ctx.ui.notify(
@@ -1180,6 +1226,15 @@ export function setupProvider(pi: ExtensionAPI) {
           if (!res.ok) {
             ctx.ui.notify(
               `openrouter-provider: generation record fetch failed (${res.status}${res.statusText ? ` ${res.statusText}` : ""})`,
+              "warning",
+            );
+            return;
+          }
+
+          if (!isJsonResponse(res)) {
+            ctx.ui.setStatus("openrouter-provider", undefined);
+            ctx.ui.notify(
+              `openrouter-provider: generation record fetch returned non-JSON response (content-type: ${res.headers.get("content-type") ?? "unknown"})`,
               "warning",
             );
             return;
