@@ -17,6 +17,7 @@ import {
   clearCache,
   clearPendingGenerationLookups,
   clearTPSObservations,
+  setGenerationRecordFetcher,
   isLoud,
   setLoud,
   log,
@@ -59,6 +60,7 @@ function createExtensionHarness() {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  setGenerationRecordFetcher(undefined);
   clearCache();
   clearPendingGenerationLookups();
   clearTPSObservations();
@@ -168,17 +170,15 @@ describe("generation API helpers", () => {
 });
 
 describe("after_provider_response integration", () => {
-  it("retries a temporarily unavailable generation record", async () => {
-    const fetchMock = vi
+  it("retries a temporarily unavailable generation record (HTTP 404)", async () => {
+    const fetcherMock = vi
       .fn()
-      .mockResolvedValueOnce({ ok: false, status: 404, statusText: "Not Found" })
+      .mockResolvedValueOnce({ status: 404, body: "" })
       .mockResolvedValueOnce({
-        ok: true,
         status: 200,
-        statusText: "OK",
-        json: async () => ({ data: { provider_name: "DigitalOcean" } }),
+        body: JSON.stringify({ data: { provider_name: "DigitalOcean" } }),
       });
-    vi.stubGlobal("fetch", fetchMock);
+    setGenerationRecordFetcher(fetcherMock);
 
     const { handlers } = createExtensionHarness();
     const setStatus = vi.fn();
@@ -191,27 +191,32 @@ describe("after_provider_response integration", () => {
     const handler = handlers.get("after_provider_response") as any;
     handler({ headers: { "x-generation-id": "gen/retry" } }, ctx);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(fetchMock).toHaveBeenCalledTimes(0);
+    expect(fetcherMock).toHaveBeenCalledTimes(0);
 
     const turnEndHandler = handlers.get("turn_end") as any;
     turnEndHandler({}, ctx);
     await new Promise((resolve) => setTimeout(resolve, 1100));
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetcherMock).toHaveBeenCalledTimes(2);
     expect(setStatus).toHaveBeenCalledWith(
       "openrouter-provider",
       "Provider:DigitalOcean ;",
     );
+    // No notification was shown for the retryable 404 — the user
+    // can't act on it and it resolves on retry.
+    const ctx2 = handlers.get("after_provider_response") as any;
+    expect(ctx.ui.notify).not.toHaveBeenCalledWith(
+      expect.stringContaining("generation record fetch failed"),
+      "warning",
+    );
   });
 
   it("fetches a lower-case generation header and displays the current provider shape", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
+    const fetcherMock = vi.fn().mockResolvedValue({
       status: 200,
-      statusText: "OK",
-      json: async () => ({ data: { provider_name: "DigitalOcean" } }),
+      body: JSON.stringify({ data: { provider_name: "DigitalOcean" } }),
     });
-    vi.stubGlobal("fetch", fetchMock);
+    setGenerationRecordFetcher(fetcherMock);
 
     const { handlers } = createExtensionHarness();
     const setStatus = vi.fn();
@@ -224,17 +229,16 @@ describe("after_provider_response integration", () => {
     const handler = handlers.get("after_provider_response") as any;
     handler({ headers: { "x-generation-id": "gen/test id" } }, ctx);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(fetchMock).toHaveBeenCalledTimes(0);
+    expect(fetcherMock).toHaveBeenCalledTimes(0);
 
     const turnEndHandler = handlers.get("turn_end") as any;
     turnEndHandler({}, ctx);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [request, options] = fetchMock.mock.calls[0];
-    expect(request).toBeInstanceOf(URL);
-    expect(request.searchParams.get("id")).toBe("gen/test id");
-    expect(options.headers).toEqual({ Authorization: "Bearer test-key" });
+    expect(fetcherMock).toHaveBeenCalledTimes(1);
+    const [generationId, apiKey] = fetcherMock.mock.calls[0];
+    expect(generationId).toBe("gen/test id");
+    expect(apiKey).toBe("test-key");
     expect(setStatus).toHaveBeenCalledWith(
       "openrouter-provider",
       "Provider:DigitalOcean ;",
