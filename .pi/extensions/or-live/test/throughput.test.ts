@@ -10,10 +10,12 @@ import {
   formatProviderTPSStatus,
   getProviderRollingTPS,
   recordProviderTPS,
+  setGenerationRecordFetcher,
 } from "../provider";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  setGenerationRecordFetcher(undefined);
   clearTPSObservations();
   clearModelBenchmarkTPS();
 });
@@ -62,12 +64,12 @@ describe("rolling provider TPS", () => {
     let clock = 10_000;
     vi.spyOn(Date, "now").mockImplementation(() => clock);
     vi.spyOn(performance, "now").mockImplementation(() => clock);
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      json: async () => ({ data: { provider_name: "Provider A" } }),
-    }));
+    setGenerationRecordFetcher(
+      vi.fn().mockResolvedValue({
+        status: 200,
+        body: JSON.stringify({ data: { provider_name: "Provider A" } }),
+      }),
+    );
 
     setModelBenchmarkTPS("acme/model", 20);
     const handlers = new Map<string, any>();

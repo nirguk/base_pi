@@ -39,6 +39,8 @@
  * workflow that validates providers via /models/<id>/endpoints.
  */
 
+import { execFile } from "child_process";
+import { promisify } from "util";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
@@ -54,6 +56,48 @@ const monotonicBase = Date.now() - performance.now();
 /** Monotonic time in ms (immune to system clock adjustments). */
 function monotonicNow(): number {
   return performance.now() + monotonicBase;
+}
+
+// ─── HTTP client for generation record lookups ──────────
+
+/** Type for the HTTP client used to fetch generation records.
+ *  Defaults to curl-based implementation; tests can inject a mock. */
+export type GenerationRecordFetcher = (
+  generationId: string,
+  apiKey: string,
+  signal: AbortSignal,
+  onRetry?: (attempt: number, delayMs: number, status: number) => void,
+) => Promise<{ status: number; body: string }>;
+
+let generationRecordFetcher: GenerationRecordFetcher | undefined;
+
+/** Set a custom HTTP client for generation record lookups.
+ *  Used by tests to inject mock fetchers without depending on
+ *  the global fetch or curl implementations. */
+export function setGenerationRecordFetcher(fetcher: GenerationRecordFetcher): void {
+  generationRecordFetcher = fetcher;
+}
+
+// ─── Elapsed timer ────────────────────────────────────────────────
+
+let lastStatusUpdateAt = monotonicNow();
+let elapsedInterval: ReturnType<typeof setInterval> | null = null;
+let rawSetStatus: ((key: string, text: string | undefined) => void) | undefined;
+
+function startElapsedTimer(): void {
+  if (elapsedInterval !== null) return;
+  elapsedInterval = setInterval(() => {
+    if (!currentProviderStatus || !rawSetStatus) return;
+    const elapsed = Math.round((monotonicNow() - lastStatusUpdateAt) / 1000);
+    rawSetStatus("openrouter-provider-elapsed", `[${elapsed}s]`);
+  }, 1000);
+}
+
+function stopElapsedTimer(): void {
+  if (elapsedInterval !== null) {
+    clearInterval(elapsedInterval);
+    elapsedInterval = null;
+  }
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────
@@ -264,7 +308,11 @@ function setProviderStatus(
   const text = enhanced !== baseText ? enhanced : baseText;
   // Skip redundant UI updates — the footer already shows this text.
   if (text === lastKnownProviderText) return;
-  ctx.ui.setStatus("openrouter-provider", text);
+  if (ref) {
+    ref.setStatus("openrouter-provider", text);
+  } else {
+    ctx.ui.setStatus("openrouter-provider", text);
+  }
   // Remember so the footer can fall back to a dimmed last-known value
   // instead of vanishing during the next deferred lookup.
   lastKnownProviderText = text;
@@ -691,9 +739,58 @@ function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+const execFileAsync = promisify(execFile);
+
 /**
- * Fetch a generation record, retrying transient failures while the caller's
- * overall timeout remains active. The callback is used for loud diagnostics.
+ * Fetch a generation record using curl. curl is used as the primary
+ * HTTP client because the global fetch implementation in certain
+ * Node.js environments may not reliably send Authorization headers
+ * or may handle redirects differently.
+ */
+async function curlFetchGenerationRecord(
+  generationId: string,
+  apiKey: string,
+  signal: AbortSignal,
+  _onRetry?: (attempt: number, delayMs: number, status: number) => void,
+): Promise<{ status: number; body: string }> {
+  if (signal.aborted) {
+    throw Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
+  }
+
+  const url = getGenerationUrl(generationId).toString();
+  const args = [
+    "-s",
+    "-w", "\n%{http_code}",
+    "-H", `Authorization: Bearer ${apiKey}`,
+    "-H", "Accept: application/json",
+    url,
+  ];
+
+  let stdout: string;
+  try {
+    const result = await execFileAsync("curl", args, { signal });
+    stdout = result.stdout;
+  } catch (e) {
+    if (signal.aborted) {
+      throw Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
+    }
+    throw e;
+  }
+
+  const lines = stdout.trim().split("\n");
+  const status = parseInt(lines.pop()!, 10);
+  const body = lines.join("\n");
+  return { status, body };
+}
+
+/**
+ * Fetch a generation record using curl, retrying transient failures
+ * while the caller's overall timeout remains active. curl is used as
+ * the primary HTTP client because the global fetch implementation in
+ * certain Node.js environments may not reliably send Authorization
+ * headers or may handle redirects differently.
+ *
+ * The callback is used for loud diagnostics.
  */
 export async function fetchGenerationRecord(
   generationId: string,
@@ -701,24 +798,63 @@ export async function fetchGenerationRecord(
   signal: AbortSignal,
   onRetry?: (attempt: number, delayMs: number, status: number) => void,
 ): Promise<Response> {
+  const fetcher = generationRecordFetcher ?? curlFetchGenerationRecord;
   for (let attempt = 0; ; attempt++) {
-    const response = await fetch(getGenerationUrl(generationId), {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal,
-    });
-
-    if (
-      response.ok ||
-      !isRetryableGenerationStatus(response.status) ||
-      attempt >= GENERATION_RETRY_DELAYS_MS.length
-    ) {
-      return response;
+    try {
+      const { status, body } = await fetcher(
+        generationId,
+        apiKey,
+        signal,
+        onRetry,
+      );
+      // Retryable HTTP statuses (404, 429, 502, etc.) are transient
+      // — retry automatically before giving up.
+      if (!isRetryableGenerationStatus(status)) {
+        return makeResponse(status, body);
+      }
+      // Status is retryable; exhaust retries before giving up.
+      if (attempt >= GENERATION_RETRY_DELAYS_MS.length) {
+        return makeResponse(status, body);
+      }
+      const delayMs = GENERATION_RETRY_DELAYS_MS[attempt];
+      onRetry?.(attempt + 1, delayMs, status);
+      await waitForRetry(delayMs, signal);
+      continue;
+    } catch (e) {
+      if (e?.name === "AbortError") throw e;
+      // HTTP client failed entirely (e.g. network down, curl not found).
+      // Treat as a transient failure and retry.
+      if (attempt >= GENERATION_RETRY_DELAYS_MS.length) throw e;
+      const delayMs = GENERATION_RETRY_DELAYS_MS[attempt];
+      onRetry?.(attempt + 1, delayMs, 0);
+      await waitForRetry(delayMs, signal);
     }
-
-    const delayMs = GENERATION_RETRY_DELAYS_MS[attempt];
-    onRetry?.(attempt + 1, delayMs, response.status);
-    await waitForRetry(delayMs, signal);
   }
+}
+
+/** Build a Response-compatible object from a raw status code and body text. */
+function makeResponse(status: number, body: string): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: "",
+    headers: {
+      get(_name: string): string | null {
+        return null;
+      },
+    },
+    async json(): Promise<unknown> {
+      return JSON.parse(body);
+    },
+    async text(): Promise<string> {
+      return body;
+    },
+    body: null as unknown as ReadableStream<Uint8Array>,
+    bodyUsed: false,
+    clone(): Response {
+      return makeResponse(status, body);
+    },
+  } as Response;
 }
 
 /** Check whether a response contains JSON content. */
@@ -803,10 +939,14 @@ async function lookupAndDisplayProvider(
       if (!res.ok) {
         if (sequence === latestGenerationSequence) {
           ctx.ui.setStatus("openrouter-provider", lastKnownProviderText ?? undefined);
-          ctx.ui.notify(
-            `openrouter-provider-status: generation record fetch failed (${res.status}${res.statusText ? ` ${res.statusText}` : ""})`,
-            "warning",
-          );
+          // Retryable statuses (404, 429, 502, etc.) are transient and
+          // will be retried automatically — no need to notify the user.
+          if (!isRetryableGenerationStatus(res.status)) {
+            ctx.ui.notify(
+              `openrouter-provider-status: generation record fetch failed (${res.status}${res.statusText ? ` ${res.statusText}` : ""})`,
+              "warning",
+            );
+          }
         }
         return;
       }
@@ -926,6 +1066,7 @@ let currentProviderStatus: ProviderStatusRef | null = null;
 export function setupProvider(pi: ExtensionAPI) {
   // Reset provider status on re-entry so the new session starts clean.
   currentProviderStatus = null;
+  stopElapsedTimer();
 
   // Register configurable history window / prior-limit as CLI flags.
   try { pi.registerFlag?.("or-provider-history-window", { description: "History window (ms) for prior providers shown dimmed in the footer", type: "number", default: DEFAULT_HISTORY_WINDOW_MS }); }
@@ -956,12 +1097,17 @@ export function setupProvider(pi: ExtensionAPI) {
 
   function rememberProviderStatus(ctx: ProviderHandlerCtx, providerName: string, slug: string): void {
     if (!slug) return;
+    rawSetStatus = ctx.ui.setStatus;
     currentProviderStatus = {
-      setStatus: ctx.ui.setStatus,
+      setStatus: (key, text) => {
+        lastStatusUpdateAt = monotonicNow();
+        ctx.ui.setStatus(key, text);
+      },
       theme: ctx.ui.theme,
       slug,
       providerName,
     };
+    startElapsedTimer();
   }
 
   // ── before_provider_headers ──────────────────────────────────────────
@@ -1100,12 +1246,26 @@ export function setupProvider(pi: ExtensionAPI) {
       if (ref) {
         pruneObservedProviders(measurement.slug);
       }
-      ctx.ui.setStatus(
-        "openrouter-provider",
-        ref
-          ? formatProviderTPSStatusWithRef(measurement.providerName, measurement.slug, ref)
-          : formatProviderTPSStatus(measurement.providerName, measurement.slug),
-      );
+      const text = ref
+        ? formatProviderTPSStatusWithRef(measurement.providerName, measurement.slug, ref)
+        : formatProviderTPSStatus(measurement.providerName, measurement.slug);
+      if (ref) {
+        ref.setStatus("openrouter-provider", text);
+      } else {
+        ctx.ui.setStatus("openrouter-provider", text);
+      }
+    } else if (currentProviderStatus?.providerName && measurement.outputTokens != null && measurement.outputTokens > 0) {
+      // Provider name not yet resolved from the generation record
+      // (the lookup may still be in flight or may have failed).
+      // Compute TPS from the measurement data we already have and
+      // update the footer so the user sees fresh throughput data
+      // immediately instead of a stale status line.
+      const ref = currentProviderStatus;
+      const startedAt = measurement.streamStartedAt ?? measurement.requestStartedAt;
+      const durationMs = startedAt ? Math.max(1, measurement.completedAt - startedAt) : 1;
+      const tps = measurement.outputTokens / (durationMs / 1000);
+      const text = `Provider:${ref.providerName} · TPS:${formatTPS(tps)} ;`;
+      ref.setStatus("openrouter-provider", text);
     }
   });
 
@@ -1133,6 +1293,7 @@ export function setupProvider(pi: ExtensionAPI) {
     clearTPSObservations();
     clearObservedProviders();
     clearCache();
+    stopElapsedTimer();
   });
 
   // ── Command: /or-provider ──────────────────────────────────────────
