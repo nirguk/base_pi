@@ -49,4 +49,6 @@ cat > ~/.config/Code/User/keybindings.json <<'KBEOF'
 ]
 KBEOF
 
+git config --global user.email "nirgrahamuk@gmail.com"
+git config --global user.name "nirguk"
 echo "[setup] Pi.dev environment ready."
