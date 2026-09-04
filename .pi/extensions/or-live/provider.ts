@@ -88,6 +88,8 @@ export function getPriorLimit(): number { return priorLimit; }
 const ROLLING_TPS_WINDOW_MS = 30 * 60 * 1000;
 /** Maximum number of response measurements retained in the in-memory map. */
 const MAX_RESPONSE_MEASUREMENTS = 100;
+/** Maximum number of generation records cached in-memory. */
+const MAX_CACHE_SIZE = 500;
 /** Batch size for background TPS fetches. */
 const TPS_FETCH_BATCH_SIZE = 20;
 /** Minimum interval (ms) between TPS fetch progress notifications. */
@@ -129,10 +131,14 @@ export function log(...args: unknown[]): void {
 export function logWithCtx(ctx: ProviderHandlerCtx, ...args: unknown[]): void {
   if (isLoud()) {
     console.log("[openrouter-provider-status]", ...args);
-    ctx.ui.notify(
-      `[openrouter-provider-status] ${args.map(String).join(" ")}`,
-      "info",
-    );
+    try {
+      ctx.ui.notify(
+        `[openrouter-provider-status] ${args.map(String).join(" ")}`,
+        "info",
+      );
+    } catch {
+      // ctx.ui may be stale or unavailable in edge cases
+    }
   }
 }
 
@@ -247,6 +253,8 @@ function setProviderStatus(
     ? formatProviderTPSStatusWithRef(providerName, slug, ref)
     : formatProviderTPSStatus(providerName, slug);
   const text = enhanced !== baseText ? enhanced : baseText;
+  // Skip redundant UI updates — the footer already shows this text.
+  if (text === lastKnownProviderText) return;
   ctx.ui.setStatus("openrouter-provider", text);
   // Remember so the footer can fall back to a dimmed last-known value
   // instead of vanishing during the next deferred lookup.
@@ -270,6 +278,7 @@ export function recordObservedProvider(slug: string, providerName: string, compl
     observedProviders.set(slug, new Map());
   }
   observedProviders.get(slug)!.set(providerName, completedAt);
+  pruneObservedProvidersIfNeeded(slug);
 }
 
 export function pruneObservedProviders(slug: string, now = Date.now(), windowMs = historyWindowMs): void {
@@ -291,12 +300,38 @@ function providerTPSKey(slug: string, providerName: string): string {
 }
 
 function pruneTPSObservations(now = Date.now()): void {
-  const cutoff = now - historyWindowMs;
+  const cutoff = now - ROLLING_TPS_WINDOW_MS;
   for (const [key, observations] of providerTPSObservations) {
     const recent = observations.filter((sample) => sample.completedAt >= cutoff);
     if (recent.length === 0) providerTPSObservations.delete(key);
     else providerTPSObservations.set(key, recent);
   }
+}
+
+/** Maximum number of TPS observation entries per (slug, provider) key
+ *  before proactive pruning removes the oldest samples. */
+const MAX_TPS_OBSERVATIONS_PER_KEY = 200;
+/** Maximum number of entries per slug in observedProviders before
+ *  proactive pruning removes the oldest entries. */
+const MAX_OBSERVED_PROVIDERS_PER_SLUG = 50;
+
+function pruneTPSObservationsIfNeeded(): void {
+  for (const [key, observations] of providerTPSObservations) {
+    if (observations.length > MAX_TPS_OBSERVATIONS_PER_KEY) {
+      const sorted = observations.sort((a, b) => b.completedAt - a.completedAt);
+      providerTPSObservations.set(key, sorted.slice(0, MAX_TPS_OBSERVATIONS_PER_KEY));
+    }
+  }
+}
+
+function pruneObservedProvidersIfNeeded(slug: string): void {
+  const providers = observedProviders.get(slug);
+  if (!providers || providers.size <= MAX_OBSERVED_PROVIDERS_PER_SLUG) return;
+  const entries = Array.from(providers.entries()).sort((a, b) => b[1] - a[1]);
+  for (const [name] of entries.slice(MAX_OBSERVED_PROVIDERS_PER_SLUG)) {
+    providers.delete(name);
+  }
+  if (providers.size === 0) observedProviders.delete(slug);
 }
 
 /** Add one completed response to the rolling provider throughput window. */
@@ -308,8 +343,12 @@ export function recordProviderTPS(
   completedAt = Date.now(),
 ): boolean {
   if (!slug || !providerName || !Number.isFinite(outputTokens) || outputTokens <= 0 ||
-      !Number.isFinite(durationMs) || durationMs <= 0) return false;
+      !Number.isFinite(durationMs) || durationMs <= 0) {
+    log("recordProviderTPS skipped: invalid input", { slug, providerName, outputTokens, durationMs });
+    return false;
+  }
   pruneTPSObservations(completedAt);
+  pruneTPSObservationsIfNeeded();
   const key = providerTPSKey(slug, providerName);
   const observations = providerTPSObservations.get(key) ?? [];
   observations.push({ completedAt, outputTokens, durationMs });
@@ -337,6 +376,7 @@ export function getProviderRollingTPS(
 export function clearTPSObservations(): void {
   providerTPSObservations.clear();
   responseMeasurements.clear();
+  observedProviders.clear();
 }
 
 export function formatProviderTPSStatus(
@@ -345,10 +385,23 @@ export function formatProviderTPSStatus(
 ): string {
   const observed = getProviderRollingTPS(slug, providerName);
   const benchmark = getModelBenchmarkTPS(slug);
-  const arrow = observed == null || benchmark == null
-    ? ""
-    : observed > benchmark ? " ↑" : observed < benchmark ? " ↓" : " →";
-  const tps = `TPS30m:${formatTPS(observed)} / OR30m:${formatTPS(benchmark)}${arrow}`;
+  if (observed == null && benchmark == null) {
+    return `Provider:${providerName} ;`;
+  }
+  const parts: string[] = [];
+  if (observed != null) {
+    parts.push(`TPS30m:${formatTPS(observed)}`);
+  }
+  if (benchmark != null) {
+    parts.push(`OR30m:${formatTPS(benchmark)}`);
+  }
+  if (parts.length === 0) {
+    return `Provider:${providerName} ;`;
+  }
+  const arrow = observed != null && benchmark != null
+    ? (observed > benchmark ? " ↑" : observed < benchmark ? " ↓" : " →")
+    : "";
+  const tps = `${parts.join(" / ")}${arrow}`;
   return `Provider:${providerName} · ${tps} ;`;
 }
 
@@ -385,12 +438,19 @@ export function formatProviderTPSStatusWithCtx(
   return formatProviderTPSStatus(providerName, slug);
 }
 
-function startResponseMeasurement(generationId: string, ctx: ProviderHandlerCtx): void {
-  const slug = ctx.model?.id;
+function startResponseMeasurement(generationId: string, ctx: ProviderHandlerCtx, orSlug?: string | null): void {
+  const slug = orSlug ?? ctx.model?.id;
   if (!slug) return;
   responseMeasurements.set(generationId, { generationId, slug, requestStartedAt: Date.now() });
-  // Keep this bounded if a provider fails before emitting message_end.
+  // Proactively prune stale entries on every insertion so the map
+  // doesn't grow unboundedly across a long-running session.
   const cutoff = Date.now() - ROLLING_TPS_WINDOW_MS;
+  for (const [key, measurement] of responseMeasurements) {
+    if (measurement.requestStartedAt < cutoff) responseMeasurements.delete(key);
+  }
+  // Keep this bounded as a secondary safeguard if a provider fails
+  // before emitting message_end and entries accumulate faster than
+  // the time-based pruning can catch up.
   while (responseMeasurements.size > MAX_RESPONSE_MEASUREMENTS) {
     const oldestKey = responseMeasurements.keys().next().value;
     if (oldestKey && responseMeasurements.get(oldestKey)!.requestStartedAt < cutoff) {
@@ -404,10 +464,15 @@ function startResponseMeasurement(generationId: string, ctx: ProviderHandlerCtx)
   pruneTPSObservations();
 }
 
-function findMeasurementForMessage(ctx: ProviderHandlerCtx): ResponseMeasurement | undefined {
+function findMeasurementForMessage(ctx: ProviderHandlerCtx, generationId?: string): ResponseMeasurement | undefined {
   const slug = ctx.model?.id;
   for (const measurement of responseMeasurements.values()) {
-    if (!measurement.completedAt && (!slug || measurement.slug === slug)) return measurement;
+    if (measurement.completedAt) continue;
+    if (generationId) {
+      if (measurement.generationId === generationId) return measurement;
+      continue;
+    }
+    if (!slug || measurement.slug === slug) return measurement;
   }
   return undefined;
 }
@@ -448,6 +513,11 @@ interface PendingGenerationLookup {
 const pendingGenerationLookups: PendingGenerationLookup[] = [];
 let nextGenerationSequence = 0;
 let latestGenerationSequence = 0;
+
+/** Track which model slug each pending lookup belongs to so turn_end
+ *  only flushes lookups for the current model, not lookups queued for
+ *  a different model that would record TPS against the wrong slug. */
+const pendingLookupSlugs = new Map<number, string>();
 
 export function getCachedProvider(generationId: string): string | null {
   const entry = generationCache.get(generationId);
@@ -503,6 +573,11 @@ export function formatProviderStatusWithCtx(
 }
 
 export function setCachedProvider(generationId: string, providerName: string): void {
+  // FIFO eviction when cache exceeds MAX_CACHE_SIZE.
+  if (generationCache.size >= MAX_CACHE_SIZE) {
+    const oldestKey = generationCache.keys().next().value;
+    if (oldestKey !== undefined) generationCache.delete(oldestKey);
+  }
   generationCache.set(generationId, { providerName, fetchedAt: Date.now() });
 }
 
@@ -523,6 +598,7 @@ function advanceGenerationSequence(): number {
 
 function queueGenerationLookup(
   generationId: string,
+  slug: string,
   sequence = advanceGenerationSequence(),
 ): number {
   latestGenerationSequence = Math.max(latestGenerationSequence, sequence);
@@ -530,6 +606,7 @@ function queueGenerationLookup(
   // A provider retry or duplicate hook should not cause duplicate lookups.
   if (!pendingGenerationLookups.some((entry) => entry.generationId === generationId)) {
     pendingGenerationLookups.push({ generationId, sequence });
+    pendingLookupSlugs.set(sequence, slug);
   }
   return sequence;
 }
@@ -745,6 +822,7 @@ async function lookupAndDisplayProvider(
   } catch (e) {
     if (e?.name === "AbortError") {
       logWithCtx(ctx, "  -> fetch timed out");
+      log("fetch timed out (generation record lookup skipped this turn)");
       return;
     }
     logWithCtx(ctx, "  -> fetch error:", e);
@@ -760,17 +838,34 @@ async function flushPendingGenerationLookups(
   onProviderResolved?: (providerName: string, slug: string) => void,
   ref?: ProviderStatusRef,
 ): Promise<void> {
+  const currentSlug = ctx.model?.id ?? "";
+  // Only flush lookups that belong to the current model. Lookups queued
+  // for a different model would record TPS against the wrong slug.
   const pending = pendingGenerationLookups.splice(0);
-  if (pending.length === 0) return;
+  const ownLookups: PendingGenerationLookup[] = [];
+  const otherLookups: PendingGenerationLookup[] = [];
+  for (const lookup of pending) {
+    const lookupSlug = pendingLookupSlugs.get(lookup.sequence);
+    if (lookupSlug === currentSlug) {
+      // Own model: consume the mapping and process the lookup.
+      pendingLookupSlugs.delete(lookup.sequence);
+      ownLookups.push(lookup);
+    } else {
+      // Other model: keep the slug mapping intact so it can be
+      // matched again when that model's turn_end fires.
+      otherLookups.push(lookup);
+    }
+  }
+  if (ownLookups.length === 0) return;
 
   logWithCtx(
     ctx,
     "  -> response stream finished; looking up",
-    pending.length,
+    ownLookups.length,
     "generation record(s)",
   );
   await Promise.all(
-    pending.map(({ generationId, sequence }) =>
+    ownLookups.map(({ generationId, sequence }) =>
       lookupAndDisplayProvider(generationId, ctx, sequence, onProviderResolved, ref),
     ),
   );
@@ -793,7 +888,9 @@ export function setupProvider(pi: ExtensionAPI) {
 
   // If OR-metrics finishes its background endpoint fetch after a response,
   // refresh the same footer immediately instead of waiting for another turn.
-  const unsubscribeBenchmarkUpdates = subscribeModelBenchmarkTPS((slug) => {
+  // Unsubscribe any previous subscription to prevent leaks on re-entry.
+  let unsubscribeBenchmarkUpdates: (() => void) | undefined;
+  unsubscribeBenchmarkUpdates = subscribeModelBenchmarkTPS((slug) => {
     if (currentProviderStatus?.slug !== slug) return;
     pruneObservedProviders(slug);
     currentProviderStatus.setStatus(
@@ -841,17 +938,22 @@ export function setupProvider(pi: ExtensionAPI) {
   pi.on("after_provider_response", (event: ProviderHeadersEvent, ctx: ProviderHandlerCtx) => {
     // This hook runs before the provider stream is consumed. Capture the ID
     // here, but defer the lookup until turn_end.
+    //
+    // CRITICAL: ctx.model may change if another request starts before the
+    // async body runs (fire-and-forget). Capture the slug early so all
+    // downstream logic uses the correct model.
+    const orSlug = ctx.model?.id ?? null;
+    const isOr = isOpenRouterRequest(ctx);
     void (async () => {
       logWithCtx(ctx, "after_provider_response fired");
 
     // Clear any previously displayed provider when the request is not
     // OpenRouter (prevents a stale "DigitalOcean" from lingering after a
     // Claude/local request).
-    if (!isOpenRouterRequest(ctx)) {
+    if (!isOr) {
       logWithCtx(ctx, "  -> not an OpenRouter request, clearing status");
       currentProviderStatus = null;
       lastKnownProviderText = null;
-      advanceGenerationSequence();
       ctx.ui.setStatus("openrouter-provider", undefined);
       return;
     }
@@ -871,7 +973,7 @@ export function setupProvider(pi: ExtensionAPI) {
     logWithCtx(ctx, "  -> headers available:", !!headers);
     if (!headers) {
       logWithCtx(ctx, "  -> no headers, clearing status");
-      advanceGenerationSequence();
+      lastKnownProviderText = null;
       ctx.ui.setStatus("openrouter-provider", undefined);
       return;
     }
@@ -881,14 +983,15 @@ export function setupProvider(pi: ExtensionAPI) {
     if (!generationId) {
       // Metadata header wasn't opted in, or this is a cache hit with no gen id.
       logWithCtx(ctx, "  -> no generation ID, bailing out (metadata header may not have been sent or provider didn't include it)");
-      advanceGenerationSequence();
+      lastKnownProviderText = null;
+      ctx.ui.setStatus("openrouter-provider", undefined);
       return;
     }
 
     // Allocate a sequence for every OpenRouter response so an older
     // background lookup cannot overwrite a newer cached result.
     const sequence = advanceGenerationSequence();
-    startResponseMeasurement(generationId, ctx);
+    startResponseMeasurement(generationId, ctx, orSlug);
 
     // Check cache before scheduling a network lookup.
     const cached = getCachedProvider(generationId);
@@ -905,7 +1008,7 @@ export function setupProvider(pi: ExtensionAPI) {
     // The record is often not available until the streaming response has
     // been fully consumed. Defer the lookup to turn_end rather than racing
     // OpenRouter's generation-record persistence from this hook.
-    queueGenerationLookup(generationId, sequence);
+    queueGenerationLookup(generationId, orSlug ?? "", sequence);
     logWithCtx(
       ctx,
       "  -> queued generation lookup until response stream finishes (sequence",
@@ -922,6 +1025,9 @@ export function setupProvider(pi: ExtensionAPI) {
   // throughput represented by OpenRouter's endpoint metric.
   pi.on("message_start", (event: ProviderMessageEvent, ctx: ProviderHandlerCtx) => {
     if (event.message?.role !== "assistant" || !isOpenRouterRequest(ctx)) return;
+    // message_start does not have access to the generationId, so we
+    // match by slug only. See findMeasurementForMessage for caveats
+    // about concurrent streams for the same model.
     const measurement = findMeasurementForMessage(ctx);
     if (measurement && measurement.streamStartedAt == null) {
       measurement.streamStartedAt = Date.now();
@@ -956,6 +1062,10 @@ export function setupProvider(pi: ExtensionAPI) {
   // turn have been consumed. This is the first reliable point to query the
   // generation endpoint.
   pi.on("turn_end", (_event: unknown, ctx: ProviderHandlerCtx) => {
+    // Only flush pending lookups for OpenRouter turns. Non-OR turns
+    // (e.g. Claude/local models) should not consume OR lookups meant
+    // for a different model, which would record TPS against the wrong slug.
+    if (!isOpenRouterRequest(ctx)) return;
     void flushPendingGenerationLookups(
       ctx,
       (providerName, slug) => rememberProviderStatus(ctx, providerName, slug),
@@ -966,9 +1076,12 @@ export function setupProvider(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", () => {
-    unsubscribeBenchmarkUpdates();
+    unsubscribeBenchmarkUpdates?.();
     currentProviderStatus = null;
     lastKnownProviderText = null;
+    clearTPSObservations();
+    clearObservedProviders();
+    clearCache();
   });
 
   // ── Command: /or-provider ──────────────────────────────────────────
