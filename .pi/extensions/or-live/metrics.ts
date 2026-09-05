@@ -22,7 +22,7 @@
  *   /or-metrics top       — top 20 by blended IPP
  *   /or-metrics tps       — top models by provider-averaged p50 throughput (tokens/sec, 30m window)
  *   /or-metrics changes   — diff since last snapshot
- *   /or-metrics --all     — include free models (slug contains :free) in the display
+ *   /or-metrics --all     — include free models (slug contains :free) and batch models (slug contains :batch) in the display
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -232,12 +232,19 @@ function isFreeModel(e: ModelEntry): boolean {
   return e.slug.includes(":free");
 }
 
+/** Return true when the model slug contains `:batch` (a batch-tier model). */
+function isBatchModel(e: ModelEntry): boolean {
+  return e.slug.includes(":batch");
+}
+
 /**
- * Return entries with free models excluded by default.
- * Pass `includeFree = true` to keep them.
+ * Return entries with free and batch models excluded by default.
+ * Pass `includeAll = true` to keep them.
  */
-function filterModels(entries: ModelEntry[], includeFree: boolean): ModelEntry[] {
-  return includeFree ? entries : entries.filter((e) => !isFreeModel(e));
+function filterModels(entries: ModelEntry[], includeAll: boolean): ModelEntry[] {
+  return includeAll
+    ? entries
+    : entries.filter((e) => !isFreeModel(e) && !isBatchModel(e));
 }
 
 // Populated from ctx.scopedModels at session start
@@ -1189,7 +1196,7 @@ export function setupMetrics(pi: ExtensionAPI) {
 
   // ── Command: /or-metrics ──
   pi.registerCommand("or-metrics", {
-    description: "Show OpenRouter ability-per-price and provider-averaged throughput metrics. Args: scoped | notable | top | tps | changes [--cap N] [--all] (default cap: $1). Free models (slug contains ':free') are excluded by default; use --all to include them. Notable raw ability categories display side-by-side: uncapped left vs price-capped right.",
+    description: "Show OpenRouter ability-per-price and provider-averaged throughput metrics. Args: scoped | notable | top | tps | changes [--cap N] [--all] (default cap: $1). Free models (slug contains ':free') and batch models (slug contains ':batch') are excluded by default; use --all to include them. Notable raw ability categories display side-by-side: uncapped left vs price-capped right.",
     getArgumentCompletions: (prefix: string): { value: string; label: string }[] | null => {
       const opts = ["scoped", "notable", "top", "tps", "changes"];
       return opts.filter((o) => o.startsWith(prefix)).map((o) => ({ value: o, label: o }));
@@ -1215,7 +1222,7 @@ export function setupMetrics(pi: ExtensionAPI) {
       // Parse --cap N and --all from args (e.g. "/or-metrics notable --cap 3 --all")
       const capMatch = args.match(/--cap\s+(\d+(?:\.\d+)?)/);
       const cap = capMatch ? parseFloat(capMatch[1]) : 1;
-      const includeFree = args.includes("--all");
+      const includeAll = args.includes("--all");
       // Strip flags from args so the mode parsing is unaffected
       const mode = args.replace(/--cap\s+\S+\s*/, "").replace(/--all\s*/, "").trim().toLowerCase();
 
@@ -1246,15 +1253,19 @@ export function setupMetrics(pi: ExtensionAPI) {
         }
       }
 
-      const displayEntries = filterModels(cachedEntries, includeFree);
+      const displayEntries = filterModels(cachedEntries, includeAll);
       const freeCount = cachedEntries.filter(isFreeModel).length;
+      const batchCount = cachedEntries.filter(isBatchModel).length;
       const notable = findNotable(displayEntries, cap);
       const lines: string[] = [];
       const caption = cap === 1
         ? `Models with AA data: ${displayEntries.length} · cache rate: ${(DEFAULT_CACHE_RATE * 100).toFixed(0)}%`
         : `Models with AA data: ${displayEntries.length} · cache rate: ${(DEFAULT_CACHE_RATE * 100).toFixed(0)} · blend-cost cap: <$${cap}`;
-      if (!includeFree && freeCount > 0) {
-        lines.push(`💡 ${freeCount} free model(s) excluded by default. Run /or-metrics --all to include them.`);
+      if (!includeAll && (freeCount > 0 || batchCount > 0)) {
+        const parts: string[] = [];
+        if (freeCount > 0) parts.push(`${freeCount} free model(s)`);
+        if (batchCount > 0) parts.push(`${batchCount} batch model(s)`);
+        lines.push(`💡 ${parts.join(" and ")} excluded by default. Run /or-metrics --all to include them.`);
         lines.push("");
       }
 
@@ -1299,11 +1310,11 @@ export function setupMetrics(pi: ExtensionAPI) {
   pi.registerTool({
     name: "or_metrics_query",
     label: "OR Metrics Query",
-    description: "Query OpenRouter ability-per-price metrics for the scoped models or for any tracked model. Use mode='scoped' for our models, mode='top N' for top N by blended IPP, mode='tps' for top models by provider-averaged p50 throughput, mode='find <query>' to search by name, or mode='notable' for analytical highlights. Notable raw ability categories (agentic, coding) are returned as side-by-side pairs with left=uncapped top-5 and right=price-capped top-5. IPP categories (blended, cached) are returned as vertical lists. Each entry includes v (ability score or IPP) and blended_cost ($/M tokens). IPP fields: blndcod (BlndCd), blndagnt (BlndAg), cachcod (CachCd), cachagt (CachAg), blnd (BlndAv), cach (CachAv). TPS field: throughput_p50 (provider-averaged p50 tokens/sec over last 30m). Display uses slugs by default (set OR_METRICS_DISPLAY_MODEL_NAMES=1 to show human-readable names). Optional cap parameter limits the price cap for the capped variation (default: 1). Free models (slug contains ':free') are excluded by default; set all=true to include them.",
+    description: "Query OpenRouter ability-per-price metrics for the scoped models or for any tracked model. Use mode='scoped' for our models, mode='top N' for top N by blended IPP, mode='tps' for top models by provider-averaged p50 throughput, mode='find <query>' to search by name, or mode='notable' for analytical highlights. Notable raw ability categories (agentic, coding) are returned as side-by-side pairs with left=uncapped top-5 and right=price-capped top-5. IPP categories (blended, cached) are returned as vertical lists. Each entry includes v (ability score or IPP) and blended_cost ($/M tokens). IPP fields: blndcod (BlndCd), blndagnt (BlndAg), cachcod (CachCd), cachagt (CachAg), blnd (BlndAv), cach (CachAv). TPS field: throughput_p50 (provider-averaged p50 tokens/sec over last 30m). Display uses slugs by default (set OR_METRICS_DISPLAY_MODEL_NAMES=1 to show human-readable names). Optional cap parameter limits the price cap for the capped variation (default: 1). Free models (slug contains ':free') and batch models (slug contains ':batch') are excluded by default; set all=true to include them.",
     parameters: Type.Object({
       mode: Type.String({ description: "scoped | top N | tps | find <query> | notable" }),
       cap: Type.Optional(Type.Number({ description: "Blend-cost cap in dollars for the <$N supplementary categories (default: 1)" })),
-      all: Type.Optional(Type.Boolean({ description: "Include free models (slug contains ':free') that are excluded by default" })),
+      all: Type.Optional(Type.Boolean({ description: "Include free models (slug contains ':free') and batch models (slug contains ':batch') that are excluded by default" })),
     }),
     async execute(
       toolCallId: string,
@@ -1327,8 +1338,8 @@ export function setupMetrics(pi: ExtensionAPI) {
       }
 
       const mode = (params.mode || "").toLowerCase().trim();
-      const includeFree = params.all === true;
-      const toolEntries = filterModels(cachedEntries, includeFree);
+      const includeAll = params.all === true;
+      const toolEntries = filterModels(cachedEntries, includeAll);
       const result: { n_tracked: number; timestamp: string; scoped?: unknown; rankings?: unknown; matches?: unknown; tps_rankings?: unknown; notable?: unknown; error?: string; note?: string } = { n_tracked: toolEntries.length, timestamp: new Date().toISOString() };
 
       if (mode === "scoped" || mode.startsWith("scoped")) {
