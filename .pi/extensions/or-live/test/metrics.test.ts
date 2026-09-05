@@ -69,9 +69,8 @@ describe("OpenRouter model analysis", () => {
   it("attaches supplied throughput by model slug", () => {
     const [entry] = analyzeModels(
       [{ id: "acme/model", pricing: { prompt: "0.001", completion: "0.001" } }],
-      { "acme/model": { p90: 42, p50: 30, mean: 35 } },
+      { "acme/model": { p50: 30, mean: 35 } },
     );
-    expect(entry.throughput_p90).toBe(42);
     expect(entry.throughput_p50).toBe(30);
     expect(entry.throughput_mean).toBe(35);
   });
@@ -155,12 +154,12 @@ describe("metrics selection and presentation", () => {
   it("renders rankings in descending throughput/IPP order with stable headers", () => {
     const withTPS = entries.map((entry) => ({
       ...entry,
-      throughput_p90: entry.slug.endsWith("fast") ? 90 : 10,
+      throughput_p50: entry.slug.endsWith("fast") ? 90 : 10,
     }));
     const tps = renderTPS(withTPS);
     // Slugs are shown by default (acme/fast before acme/slow)
     expect(tps.indexOf("acme/fast")).toBeLessThan(tps.indexOf("acme/slow"));
-    expect(tps).toContain("p90 TPS(30m)");
+    expect(tps).toContain("p50 TPS(30m)");
 
     const top = renderTop(entries);
     expect(top.indexOf("acme/fast")).toBeLessThan(top.indexOf("acme/slow"));
@@ -177,7 +176,7 @@ describe("metrics selection and presentation", () => {
         ? {
             ...s.entry,
             pricing: { blended: 0.072 },
-            throughput_p90: 106.83,
+            throughput_p50: 106.83,
             ipp: {
               blndcod: 959.72,
               blndagnt: 672.22,
@@ -205,7 +204,7 @@ describe("metrics selection and presentation", () => {
       ["Coding", "69.1"],
       ["Agentic", "48.4"],
       ["Base$/M", "$0.0720"],
-      ["p90TPS", "106.8"],  // tpsDec is derived from the value precision
+      ["p50TPS", "106.8"],  // tpsDec is derived from the value precision
       ["BlndCd", "959.72"],
       ["BlndAg", "672.22"],
       ["CachCd", "1531.47"],
@@ -233,7 +232,7 @@ describe("metrics selection and presentation", () => {
     const data = entries.map((e) => ({
       ...e,
       pricing: { blended: 0.072 },
-      throughput_p90: 106.83,
+      throughput_p50: 106.83,
       ipp: { blndcod: 959.72, blndagnt: 672.22, cachcod: 1531.47, cachagt: 1072.70, blnd: 800, cach: 900 },
       indices: { intelligence: 52, coding: 69, agentic: 48 },
     }));
@@ -244,7 +243,7 @@ describe("metrics selection and presentation", () => {
     let header = stripAnsi(lines[1]), row = stripAnsi(lines[3]);
     const topPairs: [string, string][] = [
       ["Intel", "52"], ["Coding", "69"], ["Agent", "48"],
-      ["$M/M", "$0.0720"], ["p90TPS", "106.8"],
+      ["$M/M", "$0.0720"], ["p50TPS", "106.8"],
       ["BlndCd", "959.72"], ["BlndCd", "959.72"], ["BlndAv", "800.00"], ["CachAv", "900.00"],
     ];
     const seen = new Set<string>();
@@ -264,7 +263,7 @@ describe("metrics selection and presentation", () => {
     row = stripAnsi(lines[3]);
     const tpsPairs: [string, string][] = [
       ["Base$/M", "$0.0720"], ["BlndAv", "800.00"], ["Coding", "69"],
-      ["Agentic", "48"], ["Intel", "52"], ["p90 TPS(30m)", "106.8"],
+      ["Agentic", "48"], ["Intel", "52"], ["p50 TPS(30m)", "106.8"],
     ];
     for (const [label, value] of tpsPairs) {
       expect(header.lastIndexOf(label) + label.length).toBe(row.indexOf(value) + value.length);
