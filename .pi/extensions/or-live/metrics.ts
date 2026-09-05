@@ -6,7 +6,7 @@
  * (IPP) metrics, snapshots for change detection, and exposes a /or-metrics
  * command plus a or_metrics tool for the LLM.
  *
- * Also fetches endpoint-level throughput data (p90 tokens/sec) from the
+ * Also fetches endpoint-level throughput data (p50 tokens/sec) from the
  * OpenRouter endpoints API. The model-level value is averaged across all
  * available upstream providers, each measured over a 30-minute window
  * (OpenRouter's `throughput_last_30m` field).
@@ -20,7 +20,7 @@
  *   /or-metrics scoped    — just our 4 scoped models
  *   /or-metrics notable   — analytically interesting models
  *   /or-metrics top       — top 20 by blended IPP
- *   /or-metrics tps       — top models by provider-averaged p90 throughput (tokens/sec, 30m window)
+ *   /or-metrics tps       — top models by provider-averaged p50 throughput (tokens/sec, 30m window)
  *   /or-metrics changes   — diff since last snapshot
  *   /or-metrics --all     — include free models (slug contains :free) in the display
  */
@@ -93,7 +93,6 @@ export interface ModelEntry {
     agentic: number | null;
   };
   ipp: IPPMetrics;
-  throughput_p90: number | null;
   throughput_p50: number | null;
   throughput_mean: number | null;
 }
@@ -112,7 +111,6 @@ interface SnapshotModel {
   cachagt: number | null;
   blnd: number | null;
   cach: number | null;
-  throughput_p90: number | null;
   throughput_p50: number | null;
   throughput_mean: number | null;
 }
@@ -307,7 +305,6 @@ export function analyzeModels(models: OpenRouterModel[], tpsData?: Record<string
       pricing: { input: pricing.input, output: pricing.output, cacheRead: pricing.cacheRead, blended, blendedCached },
       indices: { intelligence, coding, agentic },
       ipp: { blndcod, blndagnt, cachcod, cachagt, blnd, cach },
-      throughput_p90: tps?.p90 ?? null,
       throughput_p50: tps?.p50 ?? null,
       throughput_mean: tps?.mean ?? null,
     });
@@ -339,7 +336,7 @@ async function fetchORData(apiKey: string): Promise<ModelEntry[]> {
 
 /**
  * Fetch endpoint-level throughput data for a single model and average the
- * available provider endpoints. Returns p90, p50 and mean or null if unavailable.
+ * available provider endpoints. Returns p50, p90 and mean or null if unavailable.
  */
 async function fetchEndpointTPS(apiKey: string, slug: string): Promise<ThroughputStats | null> {
   const [author, modelSlug] = slug.split("/");
@@ -360,8 +357,8 @@ async function fetchEndpointTPS(apiKey: string, slug: string): Promise<Throughpu
 }
 
 /**
- * Fetch provider-averaged p90 throughput for a set of model slugs in parallel.
- * Returns a map of slug → p90 tokens/sec.
+ * Fetch provider-averaged p50 throughput for a set of model slugs in parallel.
+ * Returns a map of slug → p50 tokens/sec.
  */
 async function fetchTPSForSlugs(apiKey: string, slugs: string[]): Promise<Record<string, number | null>> {
   const results: Record<string, number | null> = {};
@@ -370,7 +367,7 @@ async function fetchTPSForSlugs(apiKey: string, slugs: string[]): Promise<Record
   await Promise.all(
     uniqueSlugs.map(async (slug) => {
       const tp = await fetchEndpointTPS(apiKey, slug);
-      results[slug] = tp?.p90 ?? null;
+      results[slug] = tp?.p50 ?? null;
     })
   );
 
@@ -448,7 +445,6 @@ function buildSnapshotPayload(entries: ModelEntry[]): SnapshotPayload {
       cachagt: e.ipp.cachagt,
       blnd: e.ipp.blnd,
       cach: e.ipp.cach,
-      throughput_p90: e.throughput_p90,
       throughput_p50: e.throughput_p50 ?? null,
       throughput_mean: e.throughput_mean ?? null,
     })),
@@ -488,9 +484,9 @@ function computeDiff(prior: SnapshotPayload, current: SnapshotPayload): DiffResu
       const d = ((c.blended_cost_per_m - p.blended_cost_per_m) / p.blended_cost_per_m) * 100;
       if (Math.abs(d) >= 5) changes.push({ slug: c.slug, name: c.name, metric: "price", old: p.blended_cost_per_m, new: c.blended_cost_per_m, delta: d });
     }
-    if (p.throughput_p90 != null && c.throughput_p90 != null) {
-      const d = c.throughput_p90 - p.throughput_p90;
-      if (Math.abs(d) >= 5) changes.push({ slug: c.slug, name: c.name, metric: "throughput_p90", old: p.throughput_p90, new: c.throughput_p90, delta: d });
+    if (p.throughput_p50 != null && c.throughput_p50 != null) {
+      const d = c.throughput_p50 - p.throughput_p50;
+      if (Math.abs(d) >= 5) changes.push({ slug: c.slug, name: c.name, metric: "throughput_p50", old: p.throughput_p50, new: c.throughput_p50, delta: d });
     }
     if (p.throughput_p50 != null && c.throughput_p50 != null) {
       const d = c.throughput_p50 - p.throughput_p50;
@@ -656,7 +652,7 @@ export function renderScoped(scoped: ScopedModelEntry[]) {
     { label: "Coding", align: "right" as const },
     { label: "Agentic", align: "right" as const },
     { label: "Base$/M", align: "right" as const },
-    { label: "p90TPS", align: "right" as const },
+    { label: "p50TPS", align: "right" as const },
     { label: "BlndCd", align: "right" as const },
     { label: "BlndAg", align: "right" as const },
     { label: "CachCd", align: "right" as const },
@@ -671,7 +667,7 @@ export function renderScoped(scoped: ScopedModelEntry[]) {
     if (!s.entry) continue;
     const e = s.entry;
     costVals.push(e.pricing.blended);
-    tpsVals.push(e.throughput_p90);
+    tpsVals.push(e.throughput_p50);
     ipCols[0].push(e.ipp.blndcod);
     ipCols[1].push(e.ipp.blndagnt);
     ipCols[2].push(e.ipp.cachcod);
@@ -695,7 +691,7 @@ export function renderScoped(scoped: ScopedModelEntry[]) {
     const coding = e.indices.coding != null ? e.indices.coding.toFixed(1) : "—";
     const agentic = e.indices.agentic != null ? e.indices.agentic.toFixed(1) : "—";
     const blended = FMT.cost(e.pricing.blended, costDec);
-    const tps = e.throughput_p90 != null ? e.throughput_p90.toFixed(tpsDec) : "—";
+    const tps = e.throughput_p50 != null ? e.throughput_p50.toFixed(tpsDec) : "—";
     const bc = e.ipp.blndcod != null ? e.ipp.blndcod.toFixed(ipDecs[0]) : "—";
     const ba = e.ipp.blndagnt != null ? e.ipp.blndagnt.toFixed(ipDecs[1]) : "—";
     const cc = e.ipp.cachcod != null ? e.ipp.cachcod.toFixed(ipDecs[2]) : "—";
@@ -830,7 +826,7 @@ export function renderTop(entries: ModelEntry[]) {
   const caVals = ranked.map(e => e.ipp.cachagt);
   const bVals = ranked.map(e => e.ipp.blnd);
   const cVals = ranked.map(e => e.ipp.cach);
-  const tpsVals = ranked.map(e => e.throughput_p90);
+  const tpsVals = ranked.map(e => e.throughput_p50);
   const bcDec = FMT.ippPrecision(bcVals, 2);
   const baDec = FMT.ippPrecision(baVals, 2);
   const ccDec = FMT.ippPrecision(ccVals, 2);
@@ -851,7 +847,7 @@ export function renderTop(entries: ModelEntry[]) {
       { label: "Coding", format: (e) => e.indices.coding != null ? e.indices.coding.toFixed(0) : "—" },
       { label: "Agent",  format: (e) => e.indices.agentic != null ? e.indices.agentic.toFixed(0) : "—" },
       { label: "$M/M",   format: (e) => FMT.cost(e.pricing.blended, costDec) },
-      { label: "p90TPS", format: (e) => e.throughput_p90 != null ? e.throughput_p90.toFixed(tpsDec) : "—" },
+      { label: "p50TPS", format: (e) => e.throughput_p50 != null ? e.throughput_p50.toFixed(tpsDec) : "—" },
       { label: "BlndCd", format: (e) => e.ipp.blndcod != null ? e.ipp.blndcod.toFixed(bcDec) : "—" },
       { label: "BlndAg", format: (e) => e.ipp.blndagnt != null ? e.ipp.blndagnt.toFixed(baDec) : "—" },
       { label: "CachCd", format: (e) => e.ipp.cachcod != null ? e.ipp.cachcod.toFixed(ccDec) : "—" },
@@ -968,17 +964,17 @@ export function renderChanges(data: { priorDate: string | null; currentDate: str
 
 export function renderTPS(entries: ModelEntry[]) {
   const ranked = [...entries]
-    .filter((e) => e.throughput_p90 != null)
-    .sort((a, b) => (b.throughput_p90 || 0) - (a.throughput_p90 || 0));
+    .filter((e) => e.throughput_p50 != null)
+    .sort((a, b) => (b.throughput_p50 || 0) - (a.throughput_p50 || 0));
 
-  const tpsVals = ranked.map((e) => e.throughput_p90);
+  const tpsVals = ranked.map((e) => e.throughput_p50);
   const tpsDec = columnPrecision(tpsVals, 1);
   const costVals = ranked.map((e) => e.pricing.blended);
   const costDec = columnPrecision(costVals, 4);
   const bVals = ranked.map((e) => e.ipp.blnd);
   const bDec = FMT.ippPrecision(bVals, 2);
 
-  const titlePrefix = "─ Top Models by p90 Throughput (tokens/sec) ─";
+  const titlePrefix = "─ Top Models by p50 Throughput (tokens/sec) ─";
   return renderTable(
     [
       { label: "Rank",       format: (_, i) => String(i + 1).padStart(2), align: "right" },
@@ -986,7 +982,7 @@ export function renderTPS(entries: ModelEntry[]) {
         const label = modelLabel(e);
         return label.length > 40 ? label.slice(0, 38) + "…" : label;
       } },
-      { label: "p90 TPS(30m)", format: (e) => e.throughput_p90 != null ? e.throughput_p90.toFixed(tpsDec) : "—" },
+      { label: "p50 TPS(30m)", format: (e) => e.throughput_p50 != null ? e.throughput_p50.toFixed(tpsDec) : "—" },
       { label: "Base$/M",    format: (e) => FMT.cost(e.pricing.blended, costDec) },
       { label: "BlndAv",     format: (e) => e.ipp.blnd != null ? e.ipp.blnd.toFixed(bDec) : "—" },
       { label: "Coding",     format: (e) => e.indices.coding != null ? e.indices.coding.toFixed(0) : "—" },
@@ -1032,7 +1028,7 @@ export function setupMetrics(pi: ExtensionAPI) {
   }
 
   /**
-   * Fetch p90 throughput for all tracked models in parallel batches.
+   * Fetch p50 throughput for all tracked models in parallel batches.
    * Uses the daily cache to avoid re-fetching already-known models.
    */
   async function fetchAllTPSAsync(apiKey: string, ctx: MetricsCommandCtx): Promise<void> {
@@ -1058,7 +1054,7 @@ export function setupMetrics(pi: ExtensionAPI) {
         return;
       }
 
-      tryNotify(ctx, `OR-metrics TPS: fetching p90 for ${remaining.length} models…`, "info");
+      tryNotify(ctx, `OR-metrics TPS: fetching p50 for ${remaining.length} models…`, "info");
 
       let completed = 0;
       const total = remaining.length;
@@ -1069,9 +1065,9 @@ export function setupMetrics(pi: ExtensionAPI) {
 
         await Promise.all(batch.map(async (slug: string) => {
           const tp = await fetchEndpointTPS(apiKey, slug);
-          if (tp?.p90 != null) {
-            cachedTPSData[slug] = tp.p90;
-            setModelBenchmarkTPS(slug, tp.p90);
+          if (tp?.p50 != null) {
+            cachedTPSData[slug] = tp.p50;
+            setModelBenchmarkTPS(slug, tp.p50);
           }
           completed++;
         }));
@@ -1126,11 +1122,11 @@ export function setupMetrics(pi: ExtensionAPI) {
         setModelBenchmarkTPSMap(cachedTPSData);
       }
 
-      // Seed cachedTPSData from entries that already have throughput_p90
+      // Seed cachedTPSData from entries that already have throughput_p50
       // (from previous snapshots or partial fetches)
       for (const e of entries) {
-        if (e.throughput_p90 != null && cachedTPSData[e.slug] == null) {
-          cachedTPSData[e.slug] = e.throughput_p90;
+        if (e.throughput_p50 != null && cachedTPSData[e.slug] == null) {
+          cachedTPSData[e.slug] = e.throughput_p50;
         }
         if (cachedTPSData[e.slug] != null) {
           setModelBenchmarkTPS(e.slug, cachedTPSData[e.slug]);
@@ -1243,7 +1239,7 @@ export function setupMetrics(pi: ExtensionAPI) {
       // Sync cachedTPSData into cachedEntries for display
       for (const e of cachedEntries) {
         if (cachedTPSData[e.slug] != null) {
-          e.throughput_p90 = cachedTPSData[e.slug];
+          e.throughput_p50 = cachedTPSData[e.slug];
         }
         if (cachedTPSData[e.slug] != null) {
           setModelBenchmarkTPS(e.slug, cachedTPSData[e.slug]);
@@ -1303,7 +1299,7 @@ export function setupMetrics(pi: ExtensionAPI) {
   pi.registerTool({
     name: "or_metrics_query",
     label: "OR Metrics Query",
-    description: "Query OpenRouter ability-per-price metrics for the scoped models or for any tracked model. Use mode='scoped' for our models, mode='top N' for top N by blended IPP, mode='tps' for top models by provider-averaged p90 throughput, mode='find <query>' to search by name, or mode='notable' for analytical highlights. Notable raw ability categories (agentic, coding) are returned as side-by-side pairs with left=uncapped top-5 and right=price-capped top-5. IPP categories (blended, cached) are returned as vertical lists. Each entry includes v (ability score or IPP) and blended_cost ($/M tokens). IPP fields: blndcod (BlndCd), blndagnt (BlndAg), cachcod (CachCd), cachagt (CachAg), blnd (BlndAv), cach (CachAv). TPS field: throughput_p90 (provider-averaged p90 tokens/sec over last 30m). Display uses slugs by default (set OR_METRICS_DISPLAY_MODEL_NAMES=1 to show human-readable names). Optional cap parameter limits the price cap for the capped variation (default: 1). Free models (slug contains ':free') are excluded by default; set all=true to include them.",
+    description: "Query OpenRouter ability-per-price metrics for the scoped models or for any tracked model. Use mode='scoped' for our models, mode='top N' for top N by blended IPP, mode='tps' for top models by provider-averaged p50 throughput, mode='find <query>' to search by name, or mode='notable' for analytical highlights. Notable raw ability categories (agentic, coding) are returned as side-by-side pairs with left=uncapped top-5 and right=price-capped top-5. IPP categories (blended, cached) are returned as vertical lists. Each entry includes v (ability score or IPP) and blended_cost ($/M tokens). IPP fields: blndcod (BlndCd), blndagnt (BlndAg), cachcod (CachCd), cachagt (CachAg), blnd (BlndAv), cach (CachAv). TPS field: throughput_p50 (provider-averaged p50 tokens/sec over last 30m). Display uses slugs by default (set OR_METRICS_DISPLAY_MODEL_NAMES=1 to show human-readable names). Optional cap parameter limits the price cap for the capped variation (default: 1). Free models (slug contains ':free') are excluded by default; set all=true to include them.",
     parameters: Type.Object({
       mode: Type.String({ description: "scoped | top N | tps | find <query> | notable" }),
       cap: Type.Optional(Type.Number({ description: "Blend-cost cap in dollars for the <$N supplementary categories (default: 1)" })),
@@ -1345,7 +1341,7 @@ export function setupMetrics(pi: ExtensionAPI) {
             found: s.found,
             indices: entry?.indices || null,
             ipp: entry?.ipp || null,
-            throughput_p90: cachedTPSData[s.slug] ?? null,
+            throughput_p50: cachedTPSData[s.slug] ?? null,
             pricing: entry ? { blended: entry.pricing.blended, blended_cached: entry.pricing.blendedCached } : null,
           };
         });
@@ -1360,7 +1356,7 @@ export function setupMetrics(pi: ExtensionAPI) {
           display: DISPLAY_MODEL_NAMES ? e.name : e.slug,
           indices: e.indices,
           ipp: e.ipp,
-          throughput_p90: cachedTPSData[e.slug] ?? null,
+          throughput_p50: cachedTPSData[e.slug] ?? null,
           blended_cost: e.pricing.blended,
         }));
       } else if (mode.startsWith("find")) {
@@ -1372,7 +1368,7 @@ export function setupMetrics(pi: ExtensionAPI) {
           display: DISPLAY_MODEL_NAMES ? e.name : e.slug,
           indices: e.indices,
           ipp: e.ipp,
-          throughput_p90: cachedTPSData[e.slug] ?? null,
+          throughput_p50: cachedTPSData[e.slug] ?? null,
           blended_cost: e.pricing.blended,
         }));
         if (matches.length === 0) result.note = `No matches for "${q}"`;
@@ -1386,7 +1382,7 @@ export function setupMetrics(pi: ExtensionAPI) {
           slug: e.slug,
           name: e.name,
           display: DISPLAY_MODEL_NAMES ? e.name : e.slug,
-          throughput_p90: e._tps,
+          throughput_p50: e._tps,
           blended_cost: e.pricing.blended,
           ipp: e.ipp,
         }));
