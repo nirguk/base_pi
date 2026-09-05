@@ -12,13 +12,21 @@ There is no package.json or test suite here. When you change a script, verify it
 
 ### File Search
 
-#### `findtree` — default for broad directory searches
+#### `findtree` — directory exploration
 
-Use `findtree` as the first choice when searching across many directories or when results span a deep tree. It pipes `find` through `tree --fromfile`, collapsing repeated parent-directory prefixes into a compact ASCII hierarchy — fewer tokens, structure visible at a glance.
+`findtree` is a pi **extension** (`.pi/extensions/findtree.ts`) that registers a **tool** the LLM can call and a **slash command** (`/findtree`) the user can invoke. It pipes `find` through `tree --fromfile`, collapsing repeated parent-directory prefixes into a compact ASCII hierarchy — fewer tokens, structure visible at a glance. This is the tool to use for any directory exploration task.
 
-**Example** — find all `.ts` files across the project:
+**LLM tool call** — the agent calls the `findtree` tool with `path` and `expressions` parameters, plus optional `from` (skip first N find result paths) and `lines` (paths per page, default 100, max 500). Paging is applied at the input level via `tail | head` so `tree` only processes the current page's paths.
+
+**Slash command** — the user types:
 ```
-findtree . -type f -name "*.ts" -not -path "*/node_modules/*"
+/findtree . -type f -name "*.ts" -not -path "*/node_modules/*"
+/findtree . -type f -name "*.ts" --from 100 --lines 100
+```
+
+**Example** — find all `.ts` files across the project (slash command):
+```
+/findtree . -type f -name "*.ts" -not -path "*/node_modules/*"
 ```
 Output (collapsed tree, not repeated full paths):
 ```
@@ -33,7 +41,9 @@ Output (collapsed tree, not repeated full paths):
             └── format.ts
 ```
 
-If `tree` is not installed, fall back to plain `find` with the same expressions.
+> ⚠ **`findtree` is a pi tool, not a shell command.** Do not invoke it via `bash` (e.g. `findtree . ... 2>/dev/null || find . ...`). It is not a CLI binary — calling it from a shell will fail silently (or fall through to `find`, losing tree formatting and paging). Always call it through the pi tool system or the `/findtree` slash command.
+
+**Paging**: When results exceed 100 lines, the output is cropped with a footer indicating how many lines remain and the `--from N` value to use for the next page.
 
 #### `fd` — use for flat listing and piping
 
@@ -49,13 +59,11 @@ fd --type f --glob "*.ts" . | wc -l
 fd --type f --glob "*.log" . -X rm
 ```
 
-If `fd` is not installed, use `find . -type f -name "*.ts" -not -path "*/node_modules/*"` instead.
+If `fd` is not installed, use `findtree` instead.
 
-Prefer `findtree`/`fd` over bare `bash find` for filename searches.
+#### Directory inspection — use `findtree`
 
-#### Directory inspection — prefer `tree`/`findtree` over repeated `ls`
-
-For one directory, `ls` is fine; for nested or many directories, use `tree -L 2 <dir>` or `findtree` once instead of stack of `ls` calls — you see structure in one read.
+For any directory, use `findtree` once to see the full structure in a single read. For a single directory, `ls` is fine.
 
 ### Content Search (use `rg`, never `grep -r` by default)
 
