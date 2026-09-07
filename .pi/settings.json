@@ -37,9 +37,14 @@
   },
   "packages": [
     "npm:pi-web-access",
-    "npm:pi-subagents",
+    {
+      "source": "npm:pi-subagents",
+      "extensions": []
+    },
     "git:github.com/nirguk/pi-session-analyzer",
-    "git:github.com/nirguk/pi-llm-debugging"
+    "git:github.com/nirguk/pi-llm-debugging",
+    "/workspaces/pi-prompt-analysis",
+    "git:github.com/nirguk/pi-subagents-deferred"
   ],
   "skills": [
     "s",

@@ -14,3 +14,5 @@ pi-llm-debugging/
 .pi/bin
 .pi/auth.json
 .pi/models-store.json
+.pi/run-history.jsonl
+.pi/missions
