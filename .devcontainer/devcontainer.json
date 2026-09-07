@@ -27,6 +27,6 @@
     "PI_LLM_DEBUGGING_FOOTER" : "0",
     "XDG_CONFIG_HOME": "/workspaces/base_pi/.pi",
     "NOVITA_API_KEY": "${localEnv:NOVITA}",
-    "PULSE_SERVER": "tcp:host.docker.internal:4713"
+    "PI_CODING_AGENT_DIR" : "/workspaces/base_pi/.pi"
   }
 }

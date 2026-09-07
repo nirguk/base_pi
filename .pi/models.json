@@ -1,9 +1,12 @@
 {
   "providers": {
-    "openrouter": {
+     "openrouter": {
       "compat": {
-        "thinkingFormat": "openrouter",
-        "maxTokensField": "max_completion_tokens"
+        "openRouterRouting": {
+          "allow_fallbacks": true,
+          "preferred_min_throughput": { "p50": 75 },
+          "preferred_max_latency": { "p50": 5 }
+        }
       }
     }
   }
