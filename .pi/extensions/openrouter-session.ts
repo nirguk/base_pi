@@ -71,7 +71,15 @@ export default function (pi: ExtensionAPI) {
     const label = name ?? fallback ?? PROJECT_NAME;
 
     const dateStamp = sessionStart
-      ? sessionStart.toISOString().slice(0, 10) + "-" + sessionStart.toISOString().slice(11, 16).replace(":", "")
+      ? (() => {
+          const d = sessionStart!;
+          const y = d.getFullYear();
+          const mo = String(d.getMonth() + 1).padStart(2, "0");
+          const day = String(d.getDate()).padStart(2, "0");
+          const h = String(d.getHours()).padStart(2, "0");
+          const m = String(d.getMinutes()).padStart(2, "0");
+          return `${y}-${mo}-${day}-${h}${m}`;
+        })()
       : "unknown";
 
     const payload = event.payload as Record<string, unknown>;
