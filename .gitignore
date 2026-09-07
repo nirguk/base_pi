@@ -9,3 +9,8 @@ pi-llm-debugging/
 # pi-web-access runtime cache
 .pi/pi/web-search-cache/
 .pi/pulse/
+.pi/sessions
+.pi/web-search-cache
+.pi/bin
+.pi/auth.json
+.pi/models-store.json

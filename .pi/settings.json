@@ -1,7 +1,7 @@
 {
   "defaultThinkingLevel": "low",
   "defaultProvider": "openrouter",
-  "defaultModel": "inclusionai/ling-3.0-flash",
+  "defaultModel": "ideepseek/deepseek-v4-flash-0731",
   "enabledModels": [
     "deepseek/deepseek-v4-flash-0731",
     "inclusionai/ling-3.0-flash",
@@ -16,10 +16,10 @@
     "defaultProvider": "openrouter",
     "agentOverrides": {
       "oracle": {
-        "model": "inclusionai/ling-3.0-flash"
+        "model": "deepseek/deepseek-v4-flash-0731"
       },
       "reviewer": {
-        "model": "inclusionai/ling-3.0-flash"
+        "model": "deepseek/deepseek-v4-flash-0731"
       },
       "worker": {
         "model": "inclusionai/ling-3.0-flash"
@@ -44,5 +44,7 @@
   "skills": [
     "s",
     "./skills/findtree"
-  ]
+  ],
+  "lastChangelogVersion": "0.85.1",
+  "theme": "dark"
 }
