@@ -9,11 +9,13 @@
  *   2. .pi/session-name      — project-level default (create the file)
  *   3. "base_pi"             — fallback (the project directory name)
  *
- * A short UUID suffix is always appended for uniqueness.
+ * The session_id format is: {slugified-name}-{YYYY-MM-DD-HHMM}-{shortUUID}
+ * The date/time prefix groups requests by session start, and the short UUID
+ * suffix ensures uniqueness and can be matched against the pi session id.
  *
  * Examples of what OpenRouter sees:
- *   /name Refactor auth  →  session_id: "refactor-auth-01a07e06"
- *   (no name, no file)   →  session_id: "base_pi-01a07e06"
+ *   /name Refactor auth  →  session_id: "refactor-auth-2026-09-07-2251-01a07e06"
+ *   (no name, no file)   →  session_id: "base-pi-2026-09-07-2251-01a07e06"
  *
  * Reload after changes:
  *   /reload
@@ -50,10 +52,12 @@ function readSessionNameFile(piDir: string): string | null {
 export default function (pi: ExtensionAPI) {
   let sessionId: string | null = null;
   let piDir: string | null = null;
+  let sessionStart: Date | null = null;
 
   pi.on("session_start", async (_event, ctx) => {
     sessionId = ctx.sessionManager.getSessionId();
     piDir = ctx.sessionManager.getSessionDir?.() ?? null;
+    sessionStart = new Date();
   });
 
   pi.on("before_provider_request", (event, ctx) => {
@@ -66,7 +70,14 @@ export default function (pi: ExtensionAPI) {
       : null;
     const label = name ?? fallback ?? PROJECT_NAME;
 
+    const dateStamp = sessionStart
+      ? sessionStart.toISOString().slice(0, 10) + "-" + sessionStart.toISOString().slice(11, 16).replace(":", "")
+      : "unknown";
+
     const payload = event.payload as Record<string, unknown>;
-    return { ...payload, session_id: `${slugify(label)}-${shortId(sessionId)}` };
+    return {
+      ...payload,
+      session_id: `${slugify(label)}-${dateStamp}-${shortId(sessionId)}`,
+    };
   });
 }
