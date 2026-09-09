@@ -72,6 +72,13 @@ rm -rf "$WS/.pi/npm" "$WS/.pi/git/github.com"
 ln -s "$STORE/npm"          "$WS/.pi/npm"
 ln -s "$STORE/git/github.com" "$WS/.pi/git/github.com"
 
+# Keep git status clean in the provisioned container: the tracked placeholder
+# .pi/npm/.gitignore is now a symlink target, and the symlink itself is
+# untracked+ignored (root .gitignore). skip-worktree is index-local (NOT
+# cloned), so re-apply it every build. .pi/git/github.com needs none: it is
+# covered by the committed .pi/git/.gitignore "*" rule.
+git update-index --skip-worktree .pi/npm/.gitignore 2>/dev/null || true
+
 # Deterministic reconcile: drop the (gitignored, potentially corrupted) package
 # trees and rebuild them strictly from the pinned specs in .pi/settings.json.
 # Pinned npm versions and git refs are skipped by updates, so this converges

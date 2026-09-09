@@ -13,6 +13,7 @@
     }
   },
   "postCreateCommand": "./.devcontainer/setup.sh",
+  "postStartCommand": "./.devcontainer/healthcheck.sh",
   "customizations": {
     "vscode": {
       "extensions": []

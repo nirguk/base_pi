@@ -13,6 +13,22 @@ To bypass the bind-mount (host 9p/drvfs) I/O bottleneck, **`.pi/npm`** and **`.p
 - **Do not replace these with physical directories.** A physical `node_modules` under `.pi` lands on the slow host mount again (a single-commit regression on faster machines — at stake: every extension load + npm install).
 - **Do not `rm -rf` them or their contents from the workspace side.** Deleting the link is safe (it never follows into the store; a refresh on next rebuild re-creates it), but the deterministic-reconcile clean belongs in `.devcontainer/setup.sh` via `rm -rf /opt/pi-npm-store/*`.
 - Symlinking the *parents* (not `node_modules` itself) is intentional: npm's install engine (arborist) and `git clean -fdx` both delete a symlinked `node_modules`; the parent symlink stays invisible to both and they operate normally inside the store.
+- The symlinks are runtime artifacts and must never be committed. `.pi/npm` is ignored via root `.gitignore` and its tracked placeholder `.pi/npm/.gitignore` is marked `skip-worktree` (re-applied by `setup.sh` every build, since the flag is index-local and not cloned). `.pi/git/github.com` is covered by the committed `.pi/git/.gitignore` `*` rule. `git clean -fdx` will remove the symlinks (they're ignored), so setup.sh rebuilt them deterministically anyway.
+
+## Devcontainer healthcheck
+
+`.devcontainer/healthcheck.sh` runs as the devcontainer `postStartCommand` and exits non-zero on any failed check (degraded-container signal in VS Code, does not kill the container; append `|| true` in devcontainer.json to make it advisory). It verifies, standalone (self-locating on the workspace root):
+
+1. Node runtime major matches the `features.node.version` pin in `devcontainer.json`
+2. npm CLI present
+3. Global `pi` version matches the `@earendil-works/pi-coding-agent` pin in `setup.sh`
+4–5. `.pi/npm` and `.pi/git/github.com` are symlinks with existing targets
+6. `/opt/pi-npm-store` npm + git trees are non-empty
+7. Every `npm:` extension pinned in `.pi/settings.json` resolves to its pinned version under the store
+8. Every `git:` extension resolves under the store with HEAD matching the pinned commit/tag
+9. `pi list` smoke test (fast, ~1s) — extension resolution end-to-end
+
+On failure, each check prints a one-line FAIL with a fix hint; exit 1 if any hard check fails.
 
 There is no package.json or test suite here. When you change a script, verify it by running it; when you change a doc, verify example commands actually work.
 
