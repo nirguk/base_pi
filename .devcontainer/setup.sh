@@ -37,12 +37,51 @@ EOF
 fi
 
 echo "[setup] Installing Pi.dev extensions from pinned .pi/settings.json..."
+
+# --- Container-native extension store (performance) ---
+#
+# WHY: the workspace (.pi/...) is a 9p bind mount from the Windows host
+# (drvfs via Docker Desktop). Reading/writing node_modules there is the slow
+# path for every `pi` invocation (extension loading) and for npm install.
+# /opt/pi-npm-store lives on the container's own overlayfs, so extension
+# packages land on fast native disk. We symlink the PARENT dirs (.pi/npm and
+# .pi/git/github.com) -- NOT node_modules itself -- because npm's install
+# engine (arborist) deletes a symlinked node_modules and recreates a real dir
+# ("Removing non-directory"), and `git clean -fdx` removes it on ref changes.
+# Symlinking the parents keeps the symlink out of pi's/npm's/git's way
+# (pi's path guard is lexical; git clone/fetch/reset/clean all operate inside
+# the store), while all writes flow onto container-native storage.
+#
+# Store is container-layer (not a volume, per project constraint): wiped on
+# rebuild, but each rebuild reinstalls deterministically anyway, so the win is
+# pure I/O speed, matching this setup's "deterministic reconcile" philosophy.
+#
+# NOTE for agents: `.pi/npm` and `.pi/git/github.com` ARE SYMLINKS into
+# /opt/pi-npm-store. Do NOT replace them with physical dirs and never
+# `rm -rf` INTO them from the workspace side -- rm -rf on the symlink itself
+# only removes the link, which is safe, but deleting the store contents
+# directly (`rm -rf /opt/pi-npm-store/*`) is the intended reconcile path.
+STORE=/opt/pi-npm-store
+WS=/workspaces/base_pi
+
+mkdir -p "$STORE/npm" "$STORE/git/github.com"
+# Drop previous links OR physical dirs (idempotent on re-run; a symlink
+# rm -rf removes only the link and never follows into the store, and a
+# pre-existing physical dir is exactly what we must replace)
+rm -rf "$WS/.pi/npm" "$WS/.pi/git/github.com"
+ln -s "$STORE/npm"          "$WS/.pi/npm"
+ln -s "$STORE/git/github.com" "$WS/.pi/git/github.com"
+
 # Deterministic reconcile: drop the (gitignored, potentially corrupted) package
 # trees and rebuild them strictly from the pinned specs in .pi/settings.json.
 # Pinned npm versions and git refs are skipped by updates, so this converges
 # to the committed manifest on every rebuild / fresh clone.
-rm -rf /workspaces/base_pi/.pi/npm/node_modules
-rm -rf /workspaces/base_pi/.pi/git/github.com  # keep tracked .pi/git/.gitignore
+# Clean the STORE contents, not the workspace symlinks: `pi update`'s git paths
+# (installGit/updateGit) self-heal by cloning into whatever exists behind the
+# symlink, but npm needs a clean prefix (updateNpmBatch does no pre-clean and
+# npm can't see versions dropped from the store).
+rm -rf "$STORE/npm"/*
+rm -rf "$STORE/git/github.com" 2>/dev/null || true   # keep tracked .pi/git/.gitignore
 pi update --extensions --approve
 git config --global user.email "nirgrahamuk@gmail.com"
 git config --global user.name "nirguk"

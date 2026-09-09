@@ -6,6 +6,14 @@ Project-level instructions for pi.
 - `.pi/scripts/` — standalone scripts used by extensions (`.mjs`/`.ts`, run directly with `node`)
 - `.pi/git/` — **read-only** upstream clones for reference: search them, never edit, commit, or build in them
 
+## Extension store symlinks (performance)
+
+To bypass the bind-mount (host 9p/drvfs) I/O bottleneck, **`.pi/npm`** and **`.pi/git/github.com`** are symbolic links to container-native storage (`/opt/pi-npm-store/npm` and `/opt/pi-npm-store/git/github.com`). Extension installs/loads therefore read/write on the container's overlayfs, not through the host mount.
+
+- **Do not replace these with physical directories.** A physical `node_modules` under `.pi` lands on the slow host mount again (a single-commit regression on faster machines — at stake: every extension load + npm install).
+- **Do not `rm -rf` them or their contents from the workspace side.** Deleting the link is safe (it never follows into the store; a refresh on next rebuild re-creates it), but the deterministic-reconcile clean belongs in `.devcontainer/setup.sh` via `rm -rf /opt/pi-npm-store/*`.
+- Symlinking the *parents* (not `node_modules` itself) is intentional: npm's install engine (arborist) and `git clean -fdx` both delete a symlinked `node_modules`; the parent symlink stays invisible to both and they operate normally inside the store.
+
 There is no package.json or test suite here. When you change a script, verify it by running it; when you change a doc, verify example commands actually work.
 
 ## Tool Use Tips
