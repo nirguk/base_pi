@@ -108,27 +108,32 @@ git config --global user.email "nirgrahamuk@gmail.com"
 git config --global user.name "nirguk"
 
 # ---------------------------------------------------------------------------
-# Wait for the npm store to be genuinely populated (race hardening).
+# Pinned project npm packages: install deterministically, then verify.
 #
-# WHY: `pi update` can return while part of its npm install work is still
-# flushing in the background. If we write the .provisioned completion flag
-# immediately, the postStart healthcheck (running back-to-back) can observe a
-# not-yet-populated store and emit transient FAILs for the "npm store
-# non-empty" and "npm pin X installed" checks -- observed: the npm store
-# kept updating ~20s AFTER the flag was written. The flag must only promise
-# "everything is truly in place", so we poll the pinned npm packages until
-# they resolve at their pinned versions, bounded, and only then touch it.
+# WHY not just "pi update": `pi update` reconciles git extension sources
+# synchronously, but its install of the project npm store ($STORE/npm) is
+# asynchronous and unreliable -- observed to keep flushing in the background
+# for 20s-2min+ after the command returned, and on fresh rebuilds to not
+# install the project npm packages at all. Polling that hidden tail with a
+# hard timeout is a race, not a fix. So we (1) install the pinned project npm
+# packages ourselves, synchronously (~15-20s for the pinned set), then (2)
+# verify the store is genuinely populated and quiescent before writing the
+# completion flag. The flag must only ever promise "everything is in place".
 #
-# Emits one spec per line, e.g. "npm:pi-web-access@0.28.0" (npm specs only;
-# git pins are already HEAD-resolved synchronously by `pi update`).
+# NPM_SPECS_SCRIPT emits one spec per line, e.g. "npm:pi-web-access@0.28.0"
+# (npm specs only; git pins are already HEAD-resolved synchronously).
 NPM_SPECS_SCRIPT="const s=require('$WS/.pi/settings.json');for(const p of s.packages||[]){const src=typeof p==='string'?p:(p&&p.source);if(src&&src.startsWith('npm:'))console.log(src)}"
 
-MAX_WAIT=90   # hard bound on waiting for the store (s)
-POLL=2        # poll interval (s)
-start_ts=$(date +%s)
-unresolved=""
-while :; do
-  unresolved=""
+MAX_WAIT=120      # verification backstop (s); install is now explicit+sync upfront
+POLL=2            # poll interval (s)
+STABLE_ROUNDS=3   # consecutive stable polls required before declaring done
+
+# One verification round: echo the set of pinned npm specs that do NOT yet
+# resolve at their pinned version from the store (empty string = all present).
+# Emits one spec per line, e.g. "npm:pi-web-access@0.28.0" (npm specs only;
+# git pins are already HEAD-resolved synchronously by `pi update`).
+unresolved_of() {
+  local out="" spec name ver got
   while IFS= read -r spec; do
     [ -z "$spec" ] && continue
     case "$spec" in
@@ -137,13 +142,48 @@ while :; do
         ver=${spec##*@}
         got=$(node -p "try{require('$STORE/npm/node_modules/$name/package.json').version}catch(e){''}" 2>/dev/null)
         if [ -z "$got" ] || [ "$got" != "$ver" ]; then
-          unresolved="$unresolved $name@$ver(installed:${got:-missing})"
+          out="$out $name@$ver(installed:${got:-missing})"
         fi
         ;;
     esac
   done < <(node -e "$NPM_SPECS_SCRIPT" 2>/dev/null)
+  printf '%s' "$out"
+}
 
-  [ -z "$unresolved" ] && break
+# --- Deterministic install of the pinned project npm packages ---
+# `pi update` skips pinned npm sources in its own update pass, so these are
+# never installed synchronously by it. Install them explicitly now: a direct
+# npm install is fully synchronous and deterministic (the async flush we
+# previously raced is bypassed entirely).
+PROJECT_NPM_SPECS=$(printf '%s' "$(node -e "$NPM_SPECS_SCRIPT" 2>/dev/null)" | sed -n 's#^npm:##p' | tr '\n' ' ')
+if [ -n "$PROJECT_NPM_SPECS" ]; then
+  echo "[setup] Installing pinned project npm packages: $PROJECT_NPM_SPECS"
+  # shellcheck disable=SC2086  # tokens are intentionally split into npm args
+  ( cd "$STORE/npm" && npm install --no-audit --no-fund $PROJECT_NPM_SPECS )
+fi
+
+# Verification belt (bounded): the explicit install above already puts
+# everything in place, so this just confirms the store is genuinely populated
+# and quiescent (lockfile stable for STABLE_ROUNDS polls) before we write the
+# completion flag -- guarding against a residual flush from a concurrent
+# `pi` process or a stale store from a previous failed run.
+start_ts=$(date +%s)
+unresolved=""
+stable=0
+lock_mtime_first=0
+while :; do
+  mtime=$(stat -c %Y "$STORE/npm/package-lock.json" 2>/dev/null || echo 0)
+  if [ "$mtime" != "0" ] && [ "$mtime" = "$lock_mtime_first" ]; then
+    stable=$((stable+1))
+  elif [ "$mtime" != "0" ]; then
+    stable=1
+  else
+    stable=0   # lockfile not written yet -- install still in flight
+  fi
+  lock_mtime_first=$mtime
+
+  unresolved=$(unresolved_of)
+  [ -z "$unresolved" ] && [ "$stable" -ge "$STABLE_ROUNDS" ] && break
   [ "$(date +%s)" -ge "$(( start_ts + MAX_WAIT ))" ] && break
   sleep "$POLL"
 done
