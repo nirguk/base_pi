@@ -8,14 +8,13 @@ clear
 echo -e "\n=============================================="
 echo " [setup] Initializing"
 
-# Marker (PID file): lets postStartCommand (healthcheck.sh) know setup.sh is still
-# running so it can wait instead of racing the store population on first
-# start. A PID file (not a bare flag) lets the healthcheck ignore stale markers
-# left by a SIGKILLed setup -- the EXIT trap can't run on SIGKILL, but a dead
-# PID is detected immediately, so connect-only starts never wait.
-SETUP_MARKER=/tmp/pi-store-setup-running
-trap 'rm -f "$SETUP_MARKER"' EXIT
-echo $$ > "$SETUP_MARKER"
+# Completion flag (inverted liveness marker): healthcheck.sh (postStartCommand)
+# treats /opt/pi-npm-store/.provisioned as "provisioning finished successfully"
+# and waits for it on first start instead of racing the store population. It is
+# written only as the LAST step below, so under `set -e` it can never appear on
+# a failed run. Clear any pre-existing flag up front so a re-run that fails
+# midway (e.g. after the store wipe) cannot leave a stale success signal.
+rm -f /opt/pi-npm-store/.provisioned
 
 # disable closing the terminal on Ctrl+D (unless repeated 10x times)
 if ! grep -q "IGNOREEOF" ~/.bashrc; then
@@ -104,3 +103,8 @@ git config --global user.email "nirgrahamuk@gmail.com"
 git config --global user.name "nirguk"
 
 echo "[setup] Pi.dev environment ready."
+
+# Completion flag: only reached if every step above succeeded (`set -e` exits
+# on any failure first). Success-only by construction -- never written on a
+# failed run, and removed at the top if this script re-runs.
+touch "$STORE/.provisioned"

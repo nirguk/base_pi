@@ -7,6 +7,9 @@
 # resolves to the expected version/commit.
 #
 # Exit 0 = healthy. Exit 1 = at least one check failed (prints fix hints).
+# Step 0 gates on the /opt/pi-npm-store/.provisioned completion flag that
+# setup.sh writes only on success, so first-start postCreate/postStart races
+# resolve without PID forensics; checks 1-9 then verify current state.
 # Intended to be wired as devcontainer "postStartCommand" so a broken setup
 # shows as a degraded container instead of failing silently on startup.
 set -u   # not -e: run every check, then report
@@ -23,37 +26,32 @@ pass() { printf 'PASS  %s\n' "$1"; passes=$((passes+1)); }
 fail() { printf 'FAIL  %s\n' "$1" >&2; fails=$((fails+1)); }
 hint() { printf '      fix: %s\n' "$1" >&2; }
 
-# ---------- 0. Guard: wait for a concurrent setup.sh (PID-based) ----------
-# Setup is detached from this run when VS Code runs postCreateCommand and
-# postStartCommand back-to-back on first start. If setup.sh is still running
-# (its PID is in the marker file), the store is mid-population -- wait for it
-# to finish (bounded) instead of racing it and reporting spurious FAILs.
-# A leftover marker whose PID is dead (setup SIGKILLed, process exit skipped
-# the EXIT trap) is treated as stale: removed, no wait -- so connect-only
-# starts (no setup) never block on a leftover file.
-SETUP_MARKER=/tmp/pi-store-setup-running
-setup_pid=""
-[ -f "$SETUP_MARKER" ] && setup_pid=$(cat "$SETUP_MARKER" 2>/dev/null)
-# Process is a live setup only if its PID exists AND its cmdline mentions
-# setup.sh (guards against the recycled-PID case: a dead setup's file could
-# point at an unrelated process that reused the PID).
-setup_alive() { kill -0 "$setup_pid" 2>/dev/null && grep -q 'setup\.sh' "/proc/$setup_pid/cmdline" 2>/dev/null; }
-if [ -n "$setup_pid" ] && setup_alive; then
+# ---------- 0. Guard: wait for provisioning to FINISH (completion flag) ----------
+# Inverted from the old PID-based liveness marker: setup.sh writes
+# /opt/pi-npm-store/.provisioned only as its last (successful) step, so this
+# answers "has provisioning finished successfully?" instead of "is setup.sh
+# running right now?". No PID/cmdline forensics, no stale-liveness ambiguity:
+# a leftover flag IS the success signal (persists across connect-only starts),
+# and setup.sh clears it at the top of any re-run. On first start VS Code can
+# run postCreateCommand and postStartCommand back-to-back, so when the flag is
+# absent we wait (bounded) for setup.sh to finish instead of racing it; a flag
+# still missing after the bound means provisioning never completed.
+# Empty file by design (the flag's presence is the signal; content is ignored).
+PROVISION_FLAG=/opt/pi-npm-store/.provisioned
+if [ -f "$PROVISION_FLAG" ]; then
+  pass "provisioning completed ($PROVISION_FLAG present)"
+else
   n=0
-  while setup_alive && [ "$n" -lt 60 ]; do
-    [ "$n" -eq 0 ] && echo "setup.sh running (pid $setup_pid); waiting for store population..."
+  while [ ! -f "$PROVISION_FLAG" ] && [ "$n" -lt 60 ]; do
+    [ "$n" -eq 0 ] && echo "provisioning not yet complete (no $PROVISION_FLAG); waiting for setup.sh..."
     sleep 5
     n=$((n+1))
   done
-  if setup_alive; then
-    fail "setup.sh still running after 5min; proceeding to check anyway" && hint "re-run ./.devcontainer/setup.sh if checks below fail"
+  if [ -f "$PROVISION_FLAG" ]; then
+    pass "provisioning completed while waiting (~$((n*5))s)"
   else
-    pass "waited for setup.sh to finish (store ready)"
+    fail "provisioning never completed (no $PROVISION_FLAG after 5min)" && hint "re-run ./.devcontainer/setup.sh"
   fi
-elif [ -n "$setup_pid" ]; then
-  # leftover from a killed setup -- stale, not a live race
-  rm -f "$SETUP_MARKER"
-  pass "ignored stale setup marker (pid $setup_pid not running setup.sh)"
 fi
 
 # ---------- 1. Node runtime matches devcontainer pin ----------
