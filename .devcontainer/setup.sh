@@ -107,9 +107,58 @@ pi update --extensions --approve
 git config --global user.email "nirgrahamuk@gmail.com"
 git config --global user.name "nirguk"
 
+# ---------------------------------------------------------------------------
+# Wait for the npm store to be genuinely populated (race hardening).
+#
+# WHY: `pi update` can return while part of its npm install work is still
+# flushing in the background. If we write the .provisioned completion flag
+# immediately, the postStart healthcheck (running back-to-back) can observe a
+# not-yet-populated store and emit transient FAILs for the "npm store
+# non-empty" and "npm pin X installed" checks -- observed: the npm store
+# kept updating ~20s AFTER the flag was written. The flag must only promise
+# "everything is truly in place", so we poll the pinned npm packages until
+# they resolve at their pinned versions, bounded, and only then touch it.
+#
+# Emits one spec per line, e.g. "npm:pi-web-access@0.28.0" (npm specs only;
+# git pins are already HEAD-resolved synchronously by `pi update`).
+NPM_SPECS_SCRIPT="const s=require('$WS/.pi/settings.json');for(const p of s.packages||[]){const src=typeof p==='string'?p:(p&&p.source);if(src&&src.startsWith('npm:'))console.log(src)}"
+
+MAX_WAIT=90   # hard bound on waiting for the store (s)
+POLL=2        # poll interval (s)
+start_ts=$(date +%s)
+unresolved=""
+while :; do
+  unresolved=""
+  while IFS= read -r spec; do
+    [ -z "$spec" ] && continue
+    case "$spec" in
+      npm:*)
+        name=${spec#npm:}; name=${name%@*}
+        ver=${spec##*@}
+        got=$(node -p "try{require('$STORE/npm/node_modules/$name/package.json').version}catch(e){''}" 2>/dev/null)
+        if [ -z "$got" ] || [ "$got" != "$ver" ]; then
+          unresolved="$unresolved $name@$ver(installed:${got:-missing})"
+        fi
+        ;;
+    esac
+  done < <(node -e "$NPM_SPECS_SCRIPT" 2>/dev/null)
+
+  [ -z "$unresolved" ] && break
+  [ "$(date +%s)" -ge "$(( start_ts + MAX_WAIT ))" ] && break
+  sleep "$POLL"
+done
+
+if [ -n "$unresolved" ]; then
+  echo "[setup] ERROR: npm store still incomplete after ${MAX_WAIT}s:${unresolved}" >&2
+  echo "[setup] Not writing .provisioned (a failed run must never look provisioned); re-run ./.devcontainer/setup.sh to retry." >&2
+  exit 1
+fi
+echo "[setup] npm store verified populated (pinned npm packages resolve)."
+
 echo "[setup] Pi.dev environment ready."
 
 # Completion flag: only reached if every step above succeeded (`set -e` exits
 # on any failure first). Success-only by construction -- never written on a
-# failed run, and removed at the top if this script re-runs.
+# failed run, removed at the top if this script re-runs, and now only written
+# AFTER the npm store is verified populated (see the wait loop above).
 touch "$STORE/.provisioned"
