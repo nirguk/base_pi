@@ -98,6 +98,11 @@ git update-index --skip-worktree .pi/npm/.gitignore 2>/dev/null || true
 rm -rf "$STORE/npm"/*
 # Clean the contents of github.com instead of deleting the directory
 rm -rf "$STORE/git/github.com/"*
+
+# Silence git's "detached HEAD" advice wall: `pi update` checks out pinned
+# commits/tags (intentional, read-only), so each clone/checkout would spam the
+# advisory text. Set before the update so the git invocations during it pick it up.
+git config --global advice.detachedHead false
 pi update --extensions --approve
 git config --global user.email "nirgrahamuk@gmail.com"
 git config --global user.name "nirguk"
