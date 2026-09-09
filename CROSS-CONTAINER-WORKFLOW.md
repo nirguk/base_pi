@@ -1,54 +1,63 @@
 # Cross-Container Workflow: Pi Harness + Project Devcontainer
 
-## Overview
+## Overview & Terminology
 
-This setup keeps two separate devcontainers — one for the pi harness, one for project code — connected via a shared Docker volume. Pi runs in the harness container and executes commands in the project container via `docker exec`.
+This setup keeps two separate devcontainers connected via a shared host directory. Pi runs in the harness container and executes commands in the project container via `docker exec`.
+
+Before diving in, let's establish our core jargon so terms are used consistently:
+
+* **Host Machine (or Host):** Your physical computer's operating system (macOS, Linux, Windows) where Docker/Podman and your code repositories live.
+* **Harness Container (`base_pi`):** The container running the Pi AI assistant, Node.js, and management scripts. It acts as the "controller."
+* **Project Container (`my-project`):** The isolated container running the specific project's runtime (e.g., Python) and dependencies. It acts as the "target environment."
+* **Bind Mount:** The Docker mechanism that maps a directory on the Host Machine into both containers simultaneously, ensuring file synchronization.
 
 ```
 ┌─────────────────────────────┐     ┌─────────────────────────────┐
-│  base_pi (pi harness)       │     │  my-project (code)          │
+│  base_pi (Harness Container)│     │  my-project (Project Container)│
 │                             │     │                             │
 │  ┌───────────────────────┐  │     │  ┌───────────────────────┐  │
 │  │ pi + Node.js          │  │     │  │ Python only           │  │
 │  │ (no project code)     │  │     │  │ (no pi, no Node.js)   │  │
 │  └───────────┬───────────┘  │     │  └───────────┬───────────┘  │
-│              │ shared volume│     │              │ shared volume │
-│              │◄─────────────┼─────┼──────────────►│              │
-│              │              │     │              │               │
-│  pi-run ────►│ docker exec  │     │              │               │
-│              │              │     │              │               │
+│              │ shared path  │     │              │ shared path  │
+│              │◄─────────────┼─────┼──────────────►│             │
+│              │              │     │              │              │
+│  pi-run ────►│ docker exec  │     │              │              │
+│              │              │     │              │              │
 └──────────────┼──────────────┘     └───────────────┼─────────────┘
-               │                                      │
-               │  /var/run/docker.sock (ro)          │
-               └──────────────────────────────────────┘
-                        (host Docker daemon)
+               │                                    │
+               └────────────────────────────────────┘
+                     /var/run/docker.sock (ro)
+                     (Controlled via Host Docker Daemon)
+
 ```
 
 ## Why This Pattern
 
-- **Clean project environment** — the project container has only what the project needs (Python, no Node.js, no pi artifacts)
-- **Reproducible harness** — base_pi is the single source of truth for pi configuration, extensions, and skills
-- **Separate git repos** — each repo tracks its own code independently
-- **Pi controls the project** — pi can read/write project files and execute commands in the project container
+* **Clean project environment** — the project container contains only what the project needs (Python, no Node.js, no pi artifacts).
+* **Reproducible harness** — `base_pi` serves as a single source of truth for pi configuration, extensions, and skills across multiple projects.
+* **Separate git repos** — each repository tracks its own code independently.
+* **Pi controls the project** — pi can read/write project files locally via the bind-mount and execute commands in the project container via `docker exec`.
 
 ## Prerequisites
 
-- Docker or Podman running on the host
-- VS Code with the Dev Containers extension
-- Two repos: `base_pi` (pi harness) and `my-project` (project code)
-- Both repos are cloned as siblings on the host filesystem
-
+* Docker or Podman installed and running on the **Host Machine**.
+* VS Code with the Dev Containers extension.
+* Two local repositories structured as siblings on the **Host Machine's** filesystem:
 ```
 ~/workspaces/
-├── base_pi/          ← pi harness repo
-└── my-project/       ← project code repo
+├── base_pi/          ← Pi harness repository
+└── my-project/       ← Project code repository
+
 ```
+
+
 
 ---
 
 ## Step 1: Set Up the Project Devcontainer (`my-project`)
 
-The project devcontainer is a clean, minimal Python environment with **no pi installed**.
+The project devcontainer provides a clean, minimal Python environment with **no pi installed**.
 
 ### `my-project/.devcontainer/Dockerfile`
 
@@ -66,7 +75,7 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a non-root user (match host UID/GID if needed)
+# Create a non-root user (matches host UID/GID if needed)
 ARG USER_UID=1000
 ARG USER_GID=1000
 RUN groupadd --gid $USER_GID developer \
@@ -74,6 +83,7 @@ RUN groupadd --gid $USER_GID developer \
 USER developer
 
 WORKDIR /workspaces/my-project
+
 ```
 
 ### `my-project/.devcontainer/devcontainer.json`
@@ -96,28 +106,31 @@ WORKDIR /workspaces/my-project
     "PYTHONPATH": "/workspaces/my-project"
   }
 }
+
 ```
 
-**Key points:**
-- No Node.js, no pi, no base_pi references
-- Only Python and pip — whatever the project needs
-- The container has its own independent git repo
+**Key Points:**
+
+* No Node.js, no pi, and no references to `base_pi`.
+* Contains only project-specific runtimes (Python and pip).
+* Maintains its own independent Git repository history.
 
 ---
 
 ## Step 2: Configure `base_pi` for Cross-Container Access
 
-The base_pi devcontainer needs two additions:
-1. **Docker socket access** — so pi can `docker exec` into the project container
-2. **Shared volume** — so both containers see the same project files
+The harness container (`base_pi`) requires two permissions to interact with the project container:
+
+1. **Docker socket access** — allowing the harness container to talk to the Host Machine's Docker daemon and run `docker exec`.
+2. **Shared bind-mount** — allowing both containers to read and write to the same project files on the Host Machine.
 
 ### Modify `base_pi/.devcontainer/devcontainer.json`
 
-Add the Docker socket mount and a bind mount for the project directory:
+Add the Docker socket mount and the project directory bind-mount:
 
 ```json
 {
-  "name": "Ubuntu & Node (Cached)",
+  "name": "Ubuntu & Node (Harness)",
   "build": {
     "context": ".",
     "dockerfile": "Dockerfile"
@@ -154,24 +167,25 @@ Add the Docker socket mount and a bind mount for the project directory:
     "DOCKER_HOST": "unix:///var/run/docker.sock"
   }
 }
+
 ```
 
-**What changed:**
+**Configuration Breakdown:**
 
 | Addition | Purpose |
-|----------|---------|
-| `docker.sock` mount | Pi can call `docker exec` on host containers |
-| `my-project` bind mount | Project files are visible inside base_pi's container |
-| `--network=host` | Pi can reach the project container by name on the host network |
-| `DOCKER_HOST` env var | Tools inside the container know where Docker is |
+| --- | --- |
+| `docker.sock` mount | Allows the harness container to command the Host Machine's Docker daemon. |
+| `my-project` bind mount | Exposes project source code inside the harness container filesystem. |
+| `--network=host` | Shares the Host Machine's network stack with the harness container. |
+| `DOCKER_HOST` env var | Directs Docker CLI tools inside the harness container to the mounted socket. |
 
-**Security note:** Mounting the Docker socket gives pi the ability to create, stop, and enter any container on the host. Since this is your personal harness, this is an intentional trade-off.
+> **Security Note:** Mounting the Docker socket grants root-equivalent control over the **Host Machine's** containers. Since this is a personal local development harness, this is an intentional convenience trade-off.
 
 ---
 
 ## Step 3: Create the `pi-run` Helper Script
 
-`pi-run` wraps `docker exec` so pi can run commands in the project container without knowing the container name or path details.
+The `pi-run` script wraps `docker exec`, letting pi execute commands inside the project container without needing to manually specify container IDs or full paths.
 
 ### `base_pi/.pi/scripts/pi-run`
 
@@ -187,7 +201,7 @@ Add the Docker socket mount and a bind mount for the project directory:
 #   pi-run my-project pip install -e .
 #   pi-run my-project python src/main.py
 #
-# The container must be running (opened in VS Code as a devcontainer).
+# Prerequisite: The project container must be running (opened in VS Code).
 
 set -e
 
@@ -200,190 +214,293 @@ if [ -z "$CONTAINER_NAME" ]; then
   exit 1
 fi
 
-# Check if the container is running
+# Check if the target container is running
 if ! docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep -q 'true'; then
   echo "Error: container '$CONTAINER_NAME' is not running" >&2
   echo "Open the project in VS Code to start its devcontainer first." >&2
   exit 1
 fi
 
-# Execute the command inside the container
+# Execute the command inside the project container
 docker exec -w /workspaces/my-project "$CONTAINER_NAME" "$@"
+
 ```
 
-Make it executable:
+Make the script executable:
 
 ```bash
 chmod +x base_pi/.pi/scripts/pi-run
+
 ```
 
-### How pi discovers `pi-run`
+### Exposing `pi-run` on the PATH
 
-Add `pi-run` to pi's PATH by ensuring it's in a directory that's on the container's PATH. Since base_pi's devcontainer runs as root and `/workspaces/base_pi` is the workspace, you can either:
-
-1. **Symlink it into a PATH directory** (add to `setup.sh`):
-   ```bash
-   ln -sf /workspaces/base_pi/.pi/scripts/pi-run /usr/local/bin/pi-run
-   ```
-
-2. **Or reference it directly** in pi's instructions (AGENTS.md):
-   ```
-   To run commands in the project container, use:
-   /workspaces/base_pi/.pi/scripts/pi-run <container-name> <command>
-   ```
-
-Option 1 is cleaner. Add it to `base_pi/.devcontainer/setup.sh`:
+Update `base_pi/.devcontainer/setup.sh` to symlink the script globally inside the harness container:
 
 ```bash
-# ... existing setup.sh content ...
-
-# Make pi-run available on PATH
+# Make pi-run available globally on PATH within the harness container
 ln -sf /workspaces/base_pi/.pi/scripts/pi-run /usr/local/bin/pi-run
+
 ```
 
 ---
 
-## Step 4: Configure Pi to Use `pi-run`
+## Step 4: Configure Pi Instructions (`AGENTS.md`)
 
-Add instructions to `base_pi/AGENTS.md` so pi knows how to execute commands in the project container:
+Add guidelines to `base_pi/AGENTS.md` so the AI assistant understands how to interface with the project container:
 
 ```markdown
-## Project Container
+## Project Container Workflow
 
-The project code lives in a separate devcontainer (`my-project`) for a clean,
-minimal Python environment. Pi does not run inside that container.
+The project code resides in a separate project container (`my-project`). Pi operates from the harness container and does not run inside the project container directly.
 
-To execute commands in the project container, use:
-
+*   **To execute commands** (tests, builds, scripts) in the project container, use:
+    ```bash
     pi-run my-project <command>
+    ```
+    *Examples:*
+    * `pi-run my-project python -m pytest`
+    * `pi-run my-project pip install -e .`
 
-Examples:
-    pi-run my-project python -m pytest
-    pi-run my-project pip install -e .
-    pi-run my-project python src/main.py
+*   **To read or write project files** directly (no container execution needed):
+    * Access `/workspaces/my-project`. Pi has full read/write file access via the shared bind-mount.
 
-To read or write project files directly (no container exec needed):
-    The project files are bind-mounted at /workspaces/my-project.
-    Read/write files there directly — pi has full access.
 ```
 
 ---
 
 ## Day-to-Day Workflow
 
-### Starting a session
-
-1. **Open `my-project` in VS Code** → its devcontainer builds → the project container starts running
-2. **Open `base_pi` in a second VS Code window** → its devcontainer builds → pi is available
-3. Pi can now see `/workspaces/my-project` (bind-mounted) and run commands in the project container via `pi-run`
-
-### Working with pi on project code
-
-```
-You: "run the tests in my-project"
-Pi:  pi-run my-project python -m pytest
-```
-
-```
-You: "create a new module in my-project"
-Pi:  (writes files directly to /workspaces/my-project/src/new_module.py)
-```
-
-```
-You: "install the project dependencies"
-Pi:  pi-run my-project pip install -e .
-```
-
-### Stopping a session
-
-1. Close the `my-project` VS Code window → project container stops
-2. Close the `base_pi` VS Code window → pi harness container stops
-
-### When the project container is not running
-
-If you try `pi-run my-project ...` and the container is stopped, pi-run returns an error:
-
-```
-Error: container 'my-project' is not running
-Open the project in VS Code to start its devcontainer first.
-```
-
-Pi should ask you to start the project container before retrying.
-
----
-
-## Multiple Projects
-
-If you work on multiple projects, each gets its own devcontainer. The `pi-run` script works the same way — just use the correct container name:
-
-```bash
-pi-run project-alpha python -m pytest
-pi-run project-bash python manage.py runserver
-```
-
-Container names default to the directory name of the project repo. You can override by setting an env var in `devcontainer.json`:
-
-```json
-{
-  "containerEnv": {
-    "PI_CONTAINER_NAME": "my-custom-name"
-  }
-}
-```
-
-Then `pi-run` reads `PI_CONTAINER_NAME` as a fallback:
-
-```bash
-CONTAINER_NAME="${PI_CONTAINER_NAME:-$1}"
-```
+1. **Start the Session:** Open `my-project` in a VS Code window (spins up the **Project Container**). Open `base_pi` in a separate VS Code window (spins up the **Harness Container**).
+2. **Execute Code/Tests:** Ask pi to run tests; it will automatically delegate execution via `pi-run my-project python -m pytest`.
+3. **Edit Files:** Ask pi to create code files; it writes them directly to `/workspaces/my-project/`, which instantly syncs to the project container via the bind-mount.
+4. **Stop the Session:** Close both VS Code windows to gracefully shut down both containers.
 
 ---
 
 ## Troubleshooting
 
-### `docker exec` fails with "permission denied"
+* **`docker exec` fails with "permission denied":** Verify that `/var/run/docker.sock` is properly listed under `mounts` in `base_pi`'s `devcontainer.json`.
+* **Project files appear empty:** Ensure the Host Machine path in the `mounts` array matches the absolute path to your local project sibling directory.
+* **`pi-run` reports container is not running:** Ensure the project's VS Code window is active so the project container is currently running.
 
-The Docker socket mount may not be accessible inside the container. Verify:
+Switching the harness-side management tools to Node.js aligns perfectly with your `base_pi` environment (which already includes Node 26).
 
-```bash
-# Inside base_pi's container:
-ls -la /var/run/docker.sock
-docker ps
-```
-
-If `docker ps` fails, the socket isn't mounted correctly. Check `devcontainer.json` → `mounts`.
-
-### Project files are not visible at `/workspaces/my-project`
-
-The bind mount path in `devcontainer.json` must match the actual host path. Verify:
-
-```bash
-# Inside base_pi's container:
-ls /workspaces/my-project
-```
-
-If empty, the host path `${localEnv:HOME}/workspaces/my-project` doesn't exist or is wrong. Update the mount in `devcontainer.json`.
-
-### `pi-run` says container is not running
-
-The project's VS Code window must be open so its devcontainer is running. Open the project in VS Code first, then retry.
-
-### Python commands fail inside the project container
-
-The project container may not have the required packages installed. Run `pi-run my-project pip install -e .` first, or ensure `requirements.txt` is installed in the container.
-
-### File changes don't sync between containers
-
-Both containers must mount the **same host directory** to the **same container path**. Check that the bind mount in `base_pi` and the workspace folder in `my-project`'s devcontainer point to the same host path.
+Here is the Node.js implementation for `pi-projects`. It functions both as a CLI tool and as a native module providing the `what_projects()` API for Pi extensions.
 
 ---
 
-## Security Considerations
+## Step 5: Implement the Node.js Project Registry (`pi-projects.js`)
 
-| Risk | Mitigation |
-|------|-----------|
-| Docker socket gives container escape | You own the host; this is intentional |
-| Pi can stop/create containers | `pi-run` only execs into named containers |
-| Project files writable by both containers | Use git to track changes; review before committing |
-| Container name collisions | Use unique, descriptive container names per project |
-```}
+Create this script at `base_pi/.pi/scripts/pi-projects.js`. It uses only built-in Node modules (`fs`, `path`, `child_process`), requiring zero external dependencies or `npm install` steps.
+
+### `base_pi/.pi/scripts/pi-projects.js`
+
+```javascript
+#!/usr/bin/env node
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
+
+const REGISTRY_PATH = path.join('/workspaces/base_pi/.pi', 'projects.json');
+
+function loadRegistry() {
+    if (!fs.existsSync(REGISTRY_PATH)) {
+        return {};
+    }
+    try {
+        return JSON.parse(fs.readFileSync(REGISTRY_PATH, 'utf8'));
+    } catch (e) {
+        return {};
+    }
+}
+
+function saveRegistry(registry) {
+    const dir = path.dirname(REGISTRY_PATH);
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(REGISTRY_PATH, JSON.stringify(registry, null, 2), 'utf8');
+}
+
+/**
+ * API function to programmatically discover all registered projects.
+ * Can be imported into custom Pi Node.js extensions.
+ */
+function what_projects() {
+    return loadRegistry();
+}
+
+module.exports = { what_projects };
+
+// --- CLI Handling ---
+if (require.main === module) {
+    const args = process.argv.slice(2);
+    const command = args[0];
+    const subArgs = args.slice(1);
+
+    if (!command) {
+        console.error("Usage: pi-projects <register|deregister|list> [args...]");
+        process.exit(1);
+    }
+
+    if (command === 'register') {
+        const [alias, containerName, customPath] = subArgs;
+        if (!alias || !containerName) {
+            console.error("Error: Missing arguments.");
+            console.error("Usage: pi-projects register <alias> <container-name> [path]");
+            process.exit(1);
+        }
+        const registry = loadRegistry();
+        registry[alias] = {
+            container: containerName,
+            path: customPath || `/workspaces/${alias}`
+        };
+        saveRegistry(registry);
+        console.log(`Successfully registered project: '${alias}' -> container '${containerName}'`);
+    } 
+    else if (command === 'deregister') {
+        const alias = subArgs[0];
+        if (!alias) {
+            console.error("Error: Missing project alias.");
+            console.error("Usage: pi-projects deregister <alias>");
+            process.exit(1);
+        }
+        const registry = loadRegistry();
+        if (registry[alias]) {
+            delete registry[alias];
+            saveRegistry(registry);
+            console.log(`Deregistered project: '${alias}'`);
+        } else {
+            console.error(`Error: Project '${alias}' not found in registry.`);
+            process.exit(1);
+        }
+    } 
+    else if (command === 'list') {
+        const registry = loadRegistry();
+        if (subArgs.includes('--json')) {
+            console.log(JSON.stringify(registry, null, 2));
+            process.exit(0);
+        }
+        if (Object.keys(registry).length === 0) {
+            console.log("No projects currently registered.");
+            process.exit(0);
+        }
+        console.log(`${'PROJECT ALIAS'.padEnd(20)} ${'CONTAINER NAME'.padEnd(20)} ${'PATH'.padEnd(30)} STATUS`);
+        console.log('-'.repeat(80));
+        for (const [alias, info] of Object.entries(registry)) {
+            let isRunning = false;
+            try {
+                const res = execSync(`docker inspect -f '{{.State.Running}}' ${info.container}`, { encoding: 'utf8' });
+                isRunning = res.trim() === 'true';
+            } catch (e) {
+                isRunning = false;
+            }
+            const status = isRunning ? '\x1b[32mRunning\x1b[0m' : '\x1b[31mStopped\x1b[0m';
+            console.log(`${alias.padEnd(20)} ${info.container.padEnd(20)} ${info.path.padEnd(30)} ${status}`);
+        }
+    } 
+    else {
+        console.error(`Unknown command: ${command}`);
+        process.exit(1);
+    }
+}
+
+```
+
+Make it executable and expose it on the harness container's `PATH`:
+
+```bash
+chmod +x base_pi/.pi/scripts/pi-projects.js
+
+```
+
+Add this line to your `base_pi/.devcontainer/setup.sh`:
+
+```bash
+ln -sf /workspaces/base_pi/.pi/scripts/pi-projects.js /usr/local/bin/pi-projects
+
+```
+
+---
+
+## Step 6: Using `what_projects()` in Custom Node.js Pi Extensions
+
+Because this script exports `what_projects()`, any custom Pi JavaScript or TypeScript extension can programmatically discover available project targets natively without shelling out:
+
+```javascript
+const { what_projects } = require('./pi-projects.js');
+
+function inspectWorkspace() {
+    const projects = what_projects();
+    for (const [alias, details] of Object.entries(projects)) {
+        console.log(`Found project alias: ${alias}, targeting container: ${details.container}`);
+    }
+}
+
+```
+
+---
+
+## Step 7: Updating `pi-run` to Coordinate with Node
+
+You can also update `pi-run` to read the JSON registry via a quick Node snippet, ensuring the entire stack relies on JavaScript-native JSON parsing:
+
+### `base_pi/.pi/scripts/pi-run`
+
+```bash
+#!/bin/bash
+# pi-run: Execute a command inside a registered project devcontainer
+
+set -e
+
+PROJECT_ALIAS="$1"
+shift
+
+if [ -z "$PROJECT_ALIAS" ]; then
+  echo "Error: no project alias specified" >&2
+  echo "Usage: pi-run <project-alias> <command...>" >&2
+  exit 1
+fi
+
+REGISTRY_PATH="/workspaces/base_pi/.pi/projects.json"
+
+# Resolve container name and path using Node
+RESOLVED=$(node -e '
+const fs = require("fs");
+const alias = process.argv[1];
+const regPath = process.argv[2];
+if (fs.existsSync(regPath)) {
+    try {
+        const reg = JSON.parse(fs.readFileSync(regPath, "utf8"));
+        if (reg[alias]) {
+            console.log(`${reg[alias].container}|${reg[alias].path}`);
+            process.exit(0);
+        }
+    } catch(e) {}
+}
+console.log(`${alias}|/workspaces/${alias}`);
+' "$PROJECT_ALIAS" "$REGISTRY_PATH")
+
+CONTAINER_NAME=$(echo "$RESOLVED" | cut -d'|' -f1)
+PROJECT_PATH=$(echo "$RESOLVED" | cut -d'|' -f2)
+
+# Verify container running state
+if ! docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep -q 'true'; then
+  echo "Error: container '$CONTAINER_NAME' (alias: '$PROJECT_ALIAS') is not running" >&2
+  echo "Open the project in VS Code to start its devcontainer first." >&2
+  exit 1
+fi
+
+# Execute command inside target container
+docker exec -w "$PROJECT_PATH" "$CONTAINER_NAME" "$@"
+
+```
+
+Don't forget to make `pi-run` executable:
+
+```bash
+chmod +x base_pi/.pi/scripts/pi-run
+ln -sf /workspaces/base_pi/.pi/scripts/pi-run /usr/local/bin/pi-run
+
+```
