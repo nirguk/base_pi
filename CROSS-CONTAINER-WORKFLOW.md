@@ -319,6 +319,40 @@ The project code resides in a separate project container (`congruent_roster`). P
 * **Project files appear empty:** Ensure the Host Machine path in the `mounts` array matches the absolute path to your local project sibling directory.
 * **`pi-run` reports container is not running:** Ensure the project's VS Code window is active so the project container is currently running.
 
+---
+
+## Stable Container Resolution (pinned name vs label lookup)
+
+`pi-projects` / `pi-run` resolve a project alias to a container. Three ways to
+key that resolution, in order of how much setup they need:
+
+1. **Random name (default, fragile):** VS Code assigns a random Docker name
+   (`relaxed_gould`) that changes on every rebuild. The registry entry goes
+   stale and `pi-run` breaks until you re-`register`.
+2. **Pinned name (chosen — see `congruent_roster`):** add
+   `"runArgs": ["--name=congruent_roster"]` to the project's `devcontainer.json`.
+   The **`name` field is only a UI label**; `--name` is what sets the real Docker
+   name. Registry stays valid across rebuilds. Caveat: an existing stale
+   container with the same name blocks the next `docker run` (remove it first).
+3. **Label lookup (alternative if a name ever causes trouble):** do not trust the
+   name at all — resolve by a Docker metadata filter instead:
+   ```bash
+   docker ps -q --filter label=devcontainer.local_folder="<host-folder>"
+   docker exec "$(docker ps -q --filter label=devcontainer.local_folder="...congruent_roster")" <cmd>
+   ```
+   Every devcontainer carries `devcontainer.local_folder=<host-path>` (and
+   similar labels), so this survives renames and rebuilds with no config change;
+   it only needs `pi-run`/`pi-projects` to look up by label rather than by the
+   registry's container name. Edge case: two windows open on the same folder
+   would match more than one container.
+
+> **Note (Sep 2025):** `congruent_roster` currently uses the *pinned name*
+> (`runArgs --name`). If a rebuild ever fails with a name conflict, or a rename
+> breaks the registry again, prefer falling back to the label lookup above over
+> re-pinning/re-registering. There is no first-class `containerName` property in
+> the devcontainer spec yet (vscode-remote-release#2485), so `runArgs` is the
+> community-standard way to pin.
+
 Switching the harness-side management tools to Node.js aligns perfectly with your `base_pi` environment (which already includes Node 26).
 
 Here is the Node.js implementation for `pi-projects`. It functions both as a CLI tool and as a native module providing the `what_projects()` API for Pi extensions.
