@@ -150,6 +150,42 @@ node -e "const fs=require('fs'); const f=fs.readFileSync('data.json','utf8'); co
 - **Use `read` over `cat`/`sed`** — handles truncation gracefully and supports offset/limit for large files.
 - **Check `~/.pi/agent/AGENTS.md`** for global tips that apply across all projects.
 
+## Project Container Workflow (cross-container)
+
+Project code may live in separate project devcontainers (e.g. `congruent_roster`)
+rather than inside this harness. Pi operates from the harness container and does
+not run inside the project container. See `CROSS-CONTAINER-WORKFLOW.md` and
+`cross-container-action-plan.md` for the full pattern.
+
+**Status:** the tooling below lands from `cross-container-action-plan.md`; it is
+fully usable once the harness has a docker CLI + socket mount (Phase 5 rebuild)
+and the target project's container is running (opened in VS Code).
+
+- **To execute commands** (tests, builds, scripts) inside a project container:
+  ```bash
+  pi-run <project-alias> <command...>
+  ```
+  Examples:
+  ```bash
+  pi-run congruent_roster python -m pytest
+  pi-run congruent_roster pip install -e .
+  ```
+- **Manage registered projects:**
+  ```bash
+  pi-projects list                 # alias / container / path / running status
+  pi-projects list --json          # machine-readable registry
+  pi-projects register <alias> <container-name> [/path]
+  pi-projects deregister <alias>
+  ```
+  The registry lives at `.pi/projects.json` (runtime state, not committed).
+- **To read or write project files** directly (no container execution needed):
+  access the bind-mounted path, e.g. `/workspaces/congruent_roster`. Writes sync
+  to the project container instantly.
+- **Extensions** can discover registered projects natively from Node:
+  ```js
+  const { what_projects } = require('/workspaces/base_pi/.pi/scripts/pi-projects.js');
+  ```
+
 ## Before Finishing
 
 - Re-read your diff: check example commands for typos — tool flags are easy to get wrong (this file has had one).

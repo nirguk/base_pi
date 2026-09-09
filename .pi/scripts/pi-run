@@ -1,0 +1,59 @@
+#!/bin/bash
+# pi-run: Execute a command inside a registered project devcontainer
+#
+# Usage:
+#   pi-run <project-alias> <command...>
+#
+# Examples:
+#   pi-run congruent_roster python -m pytest
+#   pi-run congruent_roster pip install -e .
+#   pi-run congruent_roster python src/main.py
+#
+# Resolves <alias> -> (container, path) via the registry at
+# /workspaces/base_pi/.pi/projects.json (maintained by `pi-projects`);
+# falls back to alias == container name and /workspaces/<alias>.
+#
+# Prerequisite: the target container must be running (opened in VS Code).
+
+set -e
+
+PROJECT_ALIAS="$1"
+shift
+
+if [ -z "$PROJECT_ALIAS" ]; then
+  echo "Error: no project alias specified" >&2
+  echo "Usage: pi-run <project-alias> <command...>" >&2
+  exit 1
+fi
+
+REGISTRY_PATH="/workspaces/base_pi/.pi/projects.json"
+
+# Resolve container name and path using Node
+RESOLVED=$(node -e '
+const fs = require("fs");
+const alias = process.argv[1];
+const regPath = process.argv[2];
+if (fs.existsSync(regPath)) {
+    try {
+        const reg = JSON.parse(fs.readFileSync(regPath, "utf8"));
+        if (reg[alias]) {
+            console.log(`${reg[alias].container}|${reg[alias].path}`);
+            process.exit(0);
+        }
+    } catch(e) {}
+}
+console.log(`${alias}|/workspaces/${alias}`);
+' "$PROJECT_ALIAS" "$REGISTRY_PATH")
+
+CONTAINER_NAME=$(echo "$RESOLVED" | cut -d'|' -f1)
+PROJECT_PATH=$(echo "$RESOLVED" | cut -d'|' -f2)
+
+# Verify container running state
+if ! docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep -q 'true'; then
+  echo "Error: container '$CONTAINER_NAME' (alias: '$PROJECT_ALIAS') is not running" >&2
+  echo "Open the project in VS Code to start its devcontainer first." >&2
+  exit 1
+fi
+
+# Execute command inside target container
+exec docker exec -w "$PROJECT_PATH" "$CONTAINER_NAME" "$@"

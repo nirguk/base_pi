@@ -5,10 +5,13 @@
     "dockerfile": "Dockerfile"
   },
   "remoteUser": "root",
-  "mounts": [],
+  "mounts": [
+    "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
+    "source=${localEnv:BASE_FOLDER}/congruent_roster,target=/workspaces/congruent_roster,type=bind"
+  ],
   "runArgs": [],
   "features": {
-    "ghcr.io/devcontainers/features/node:1": {
+    "ghcr.io/devcontainers/features/node:2.1.0": {
       "version": "26"
     }
   },
@@ -28,6 +31,7 @@
     "PI_LLM_DEBUGGING_FOOTER" : "0",
     "XDG_CONFIG_HOME": "/workspaces/base_pi/.pi",
     "NOVITA_API_KEY": "${localEnv:NOVITA}",
-    "PI_CODING_AGENT_DIR" : "/workspaces/base_pi/.pi"
+    "PI_CODING_AGENT_DIR" : "/workspaces/base_pi/.pi",
+    "DOCKER_HOST": "unix:///var/run/docker.sock"
   }
 }

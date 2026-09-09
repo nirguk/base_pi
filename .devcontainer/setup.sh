@@ -195,6 +195,13 @@ if [ -n "$unresolved" ]; then
 fi
 echo "[setup] npm store verified populated (pinned npm packages resolve)."
 
+# ---------------------------------------------------------------------------
+# Cross-container tooling (see CROSS-CONTAINER-WORKFLOW.md): expose pi-run
+# (docker exec wrapper) and pi-projects (project registry CLI + what_projects()
+# module) globally on PATH inside the harness.
+ln -sf "$WS/.pi/scripts/pi-run" /usr/local/bin/pi-run
+ln -sf "$WS/.pi/scripts/pi-projects.js" /usr/local/bin/pi-projects
+
 echo "[setup] Pi.dev environment ready."
 
 # Completion flag: only reached if every step above succeeded (`set -e` exits
