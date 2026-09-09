@@ -8,6 +8,15 @@ clear
 echo -e "\n=============================================="
 echo " [setup] Initializing"
 
+# Marker (PID file): lets postStartCommand (healthcheck.sh) know setup.sh is still
+# running so it can wait instead of racing the store population on first
+# start. A PID file (not a bare flag) lets the healthcheck ignore stale markers
+# left by a SIGKILLed setup -- the EXIT trap can't run on SIGKILL, but a dead
+# PID is detected immediately, so connect-only starts never wait.
+SETUP_MARKER=/tmp/pi-store-setup-running
+trap 'rm -f "$SETUP_MARKER"' EXIT
+echo $$ > "$SETUP_MARKER"
+
 # disable closing the terminal on Ctrl+D (unless repeated 10x times)
 if ! grep -q "IGNOREEOF" ~/.bashrc; then
     echo "export IGNOREEOF=10" >> ~/.bashrc

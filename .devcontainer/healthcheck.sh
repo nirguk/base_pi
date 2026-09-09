@@ -23,6 +23,39 @@ pass() { printf 'PASS  %s\n' "$1"; passes=$((passes+1)); }
 fail() { printf 'FAIL  %s\n' "$1" >&2; fails=$((fails+1)); }
 hint() { printf '      fix: %s\n' "$1" >&2; }
 
+# ---------- 0. Guard: wait for a concurrent setup.sh (PID-based) ----------
+# Setup is detached from this run when VS Code runs postCreateCommand and
+# postStartCommand back-to-back on first start. If setup.sh is still running
+# (its PID is in the marker file), the store is mid-population -- wait for it
+# to finish (bounded) instead of racing it and reporting spurious FAILs.
+# A leftover marker whose PID is dead (setup SIGKILLed, process exit skipped
+# the EXIT trap) is treated as stale: removed, no wait -- so connect-only
+# starts (no setup) never block on a leftover file.
+SETUP_MARKER=/tmp/pi-store-setup-running
+setup_pid=""
+[ -f "$SETUP_MARKER" ] && setup_pid=$(cat "$SETUP_MARKER" 2>/dev/null)
+# Process is a live setup only if its PID exists AND its cmdline mentions
+# setup.sh (guards against the recycled-PID case: a dead setup's file could
+# point at an unrelated process that reused the PID).
+setup_alive() { kill -0 "$setup_pid" 2>/dev/null && grep -q 'setup\.sh' "/proc/$setup_pid/cmdline" 2>/dev/null; }
+if [ -n "$setup_pid" ] && setup_alive; then
+  n=0
+  while setup_alive && [ "$n" -lt 60 ]; do
+    [ "$n" -eq 0 ] && echo "setup.sh running (pid $setup_pid); waiting for store population..."
+    sleep 5
+    n=$((n+1))
+  done
+  if setup_alive; then
+    fail "setup.sh still running after 5min; proceeding to check anyway" && hint "re-run ./.devcontainer/setup.sh if checks below fail"
+  else
+    pass "waited for setup.sh to finish (store ready)"
+  fi
+elif [ -n "$setup_pid" ]; then
+  # leftover from a killed setup -- stale, not a live race
+  rm -f "$SETUP_MARKER"
+  pass "ignored stale setup marker (pid $setup_pid not running setup.sh)"
+fi
+
 # ---------- 1. Node runtime matches devcontainer pin ----------
 node_pin=""
 if command -v node >/dev/null 2>&1; then
