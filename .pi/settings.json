@@ -44,7 +44,10 @@
     "git:github.com/nirguk/pi-session-analyzer@b549aa9e494a7440dca065e2cf796544b0ec0f69",
     "git:github.com/nirguk/pi-llm-debugging@e530e0d19cb93b03957ee1d6906d3cd86c46bfcf",
     "git:github.com/nirguk/pi-prompt-analysis@v0.2.2",
-    "git:github.com/nirguk/pi-subagents-deferred@9e50ea7a3c11fed92420ff9cc2e644fef2e8b353"
+    {
+      "source": "git:github.com/nirguk/pi-subagents-deferred@9e50ea7a3c11fed92420ff9cc2e644fef2e8b353",
+      "extensions": []
+    }
   ],
   "skills": [
     "s",
