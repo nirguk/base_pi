@@ -1,5 +1,15 @@
 # Cross-Container Workflow: Pi Harness + Project Devcontainer
 
+> **Status note (2025-09):** This doc is the *concept/aspiration*. The live harness
+> differs from the snippets here until
+> [`cross-container-action-plan.md`](cross-container-action-plan.md) is executed.
+> In particular: the harness `devcontainer.json` currently has `"mounts": []` and
+> no `DOCKER_HOST`, and the harness has **no docker CLI** installed yet. The
+> action plan tracks the concrete, staged delta and is the source of truth for
+> what exists vs. what is planned. `congruent_roster` is the **first project**
+> being wired up; it is an example entry in the registry, not a special case.
+> See "Adding More Projects" below for how other projects plug in.
+
 ## Overview & Terminology
 
 This setup keeps two separate devcontainers connected via a shared host directory. Pi runs in the harness container and executes commands in the project container via `docker exec`.
@@ -8,12 +18,12 @@ Before diving in, let's establish our core jargon so terms are used consistently
 
 * **Host Machine (or Host):** Your physical computer's operating system (macOS, Linux, Windows) where Docker/Podman and your code repositories live.
 * **Harness Container (`base_pi`):** The container running the Pi AI assistant, Node.js, and management scripts. It acts as the "controller."
-* **Project Container (`my-project`):** The isolated container running the specific project's runtime (e.g., Python) and dependencies. It acts as the "target environment."
+* **Project Container (`congruent_roster`):** The isolated container running the specific project's runtime (e.g., Python) and dependencies. It acts as the "target environment."
 * **Bind Mount:** The Docker mechanism that maps a directory on the Host Machine into both containers simultaneously, ensuring file synchronization.
 
 ```
 ┌─────────────────────────────┐     ┌─────────────────────────────┐
-│  base_pi (Harness Container)│     │  my-project (Project Container)│
+│  base_pi (Harness Container)│     │  congruent_roster (Project Container)│
 │                             │     │                             │
 │  ┌───────────────────────┐  │     │  ┌───────────────────────┐  │
 │  │ pi + Node.js          │  │     │  │ Python only           │  │
@@ -47,7 +57,7 @@ Before diving in, let's establish our core jargon so terms are used consistently
 ```
 ~/workspaces/
 ├── base_pi/          ← Pi harness repository
-└── my-project/       ← Project code repository
+└── congruent_roster/       ← Project code repository
 
 ```
 
@@ -55,11 +65,11 @@ Before diving in, let's establish our core jargon so terms are used consistently
 
 ---
 
-## Step 1: Set Up the Project Devcontainer (`my-project`)
+## Step 1: Set Up the Project Devcontainer (`congruent_roster`)
 
 The project devcontainer provides a clean, minimal Python environment with **no pi installed**.
 
-### `my-project/.devcontainer/Dockerfile`
+### `congruent_roster/.devcontainer/Dockerfile`
 
 ```dockerfile
 FROM mcr.microsoft.com/devcontainers/base:ubuntu-24.04
@@ -82,11 +92,11 @@ RUN groupadd --gid $USER_GID developer \
     && useradd --uid $USER_UID --gid $USER_GID -m developer
 USER developer
 
-WORKDIR /workspaces/my-project
+WORKDIR /workspaces/congruent_roster
 
 ```
 
-### `my-project/.devcontainer/devcontainer.json`
+### `congruent_roster/.devcontainer/devcontainer.json`
 
 ```json
 {
@@ -96,14 +106,14 @@ WORKDIR /workspaces/my-project
     "dockerfile": "Dockerfile"
   },
   "remoteUser": "developer",
-  "workspaceFolder": "/workspaces/my-project",
+  "workspaceFolder": "/workspaces/congruent_roster",
   "customizations": {
     "vscode": {
       "extensions": []
     }
   },
   "containerEnv": {
-    "PYTHONPATH": "/workspaces/my-project"
+    "PYTHONPATH": "/workspaces/congruent_roster"
   }
 }
 
@@ -119,10 +129,21 @@ WORKDIR /workspaces/my-project
 
 ## Step 2: Configure `base_pi` for Cross-Container Access
 
-The harness container (`base_pi`) requires two permissions to interact with the project container:
+The harness container (`base_pi`) requires three pieces to interact with the project container:
 
-1. **Docker socket access** — allowing the harness container to talk to the Host Machine's Docker daemon and run `docker exec`.
-2. **Shared bind-mount** — allowing both containers to read and write to the same project files on the Host Machine.
+1. **A docker CLI inside the harness** — the `docker` client binary must be installed in the harness container. The devcontainer image does **not** include it by default; add it to the harness Dockerfile:
+
+   ```dockerfile
+   # base_pi/.devcontainer/Dockerfile (addition)
+   RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
+       && apt-get -y install --no-install-recommends docker.io \
+       && rm -rf /var/lib/apt/lists/*
+   ```
+
+   (`docker.io` installs the client; the socket below does the talking.)
+
+2. **Docker socket access** — allowing the harness container to talk to the Host Machine's Docker daemon and run `docker exec`.
+3. **Shared bind-mount** — allowing both containers to read and write to the same project files on the Host Machine.
 
 ### Modify `base_pi/.devcontainer/devcontainer.json`
 
@@ -138,11 +159,9 @@ Add the Docker socket mount and the project directory bind-mount:
   "remoteUser": "root",
   "mounts": [
     "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
-    "source=${localEnv:HOME}/workspaces/my-project,target=/workspaces/my-project,type=bind"
+    "source=${localEnv:HOME}/workspaces/congruent_roster,target=/workspaces/congruent_roster,type=bind"
   ],
-  "runArgs": [
-    "--network=host"
-  ],
+  "runArgs": [],
   "features": {
     "ghcr.io/devcontainers/features/node:1": {
       "version": "26"
@@ -175,9 +194,25 @@ Add the Docker socket mount and the project directory bind-mount:
 | Addition | Purpose |
 | --- | --- |
 | `docker.sock` mount | Allows the harness container to command the Host Machine's Docker daemon. |
-| `my-project` bind mount | Exposes project source code inside the harness container filesystem. |
-| `--network=host` | Shares the Host Machine's network stack with the harness container. |
+| `congruent_roster` bind mount | Exposes project source code inside the harness container filesystem. |
 | `DOCKER_HOST` env var | Directs Docker CLI tools inside the harness container to the mounted socket. |
+
+> **`--network=host`:** earlier drafts added this to `runArgs`. It is **not** required for this pattern (
+`docker exec` goes over the socket, not the network namespace) and is legacy cruft; keep 
+`runArgs` empty unless a project specifically needs host networking. It is therefore omitted above.
+
+---
+
+## Adding More Projects
+
+`congruent_roster` is the worked example. To wire up **another** project `other-project`:
+
+1. Add one `mounts` line in the harness `devcontainer.json` for its host path:
+   `"source=${localEnv:HOME}/workspaces/other-project,target=/workspaces/other-project,type=bind"` (one mount entry per project — this array is the only per-project part of the harness config).
+2. Run `pi-projects register other-project <container-name> /workspaces/other-project`.
+3. Use `pi-run other-project <command>` and read/write files at `/workspaces/other-project`.
+
+The registry (`projects.json`) is dynamic and unbounded; only the `mounts` array grows by one line per project. `pi-projects list` shows all registered projects and their running state.
 
 > **Security Note:** Mounting the Docker socket grants root-equivalent control over the **Host Machine's** containers. Since this is a personal local development harness, this is an intentional convenience trade-off.
 
@@ -197,9 +232,9 @@ The `pi-run` script wraps `docker exec`, letting pi execute commands inside the 
 #   pi-run <container-name> <command...>
 #
 # Examples:
-#   pi-run my-project python -m pytest
-#   pi-run my-project pip install -e .
-#   pi-run my-project python src/main.py
+#   pi-run congruent_roster python -m pytest
+#   pi-run congruent_roster pip install -e .
+#   pi-run congruent_roster python src/main.py
 #
 # Prerequisite: The project container must be running (opened in VS Code).
 
@@ -222,7 +257,7 @@ if ! docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep
 fi
 
 # Execute the command inside the project container
-docker exec -w /workspaces/my-project "$CONTAINER_NAME" "$@"
+docker exec -w /workspaces/congruent_roster "$CONTAINER_NAME" "$@"
 
 ```
 
@@ -252,18 +287,18 @@ Add guidelines to `base_pi/AGENTS.md` so the AI assistant understands how to int
 ```markdown
 ## Project Container Workflow
 
-The project code resides in a separate project container (`my-project`). Pi operates from the harness container and does not run inside the project container directly.
+The project code resides in a separate project container (`congruent_roster`). Pi operates from the harness container and does not run inside the project container directly.
 
 *   **To execute commands** (tests, builds, scripts) in the project container, use:
     ```bash
-    pi-run my-project <command>
+    pi-run congruent_roster <command>
     ```
     *Examples:*
-    * `pi-run my-project python -m pytest`
-    * `pi-run my-project pip install -e .`
+    * `pi-run congruent_roster python -m pytest`
+    * `pi-run congruent_roster pip install -e .`
 
 *   **To read or write project files** directly (no container execution needed):
-    * Access `/workspaces/my-project`. Pi has full read/write file access via the shared bind-mount.
+    * Access `/workspaces/congruent_roster`. Pi has full read/write file access via the shared bind-mount.
 
 ```
 
@@ -271,9 +306,9 @@ The project code resides in a separate project container (`my-project`). Pi oper
 
 ## Day-to-Day Workflow
 
-1. **Start the Session:** Open `my-project` in a VS Code window (spins up the **Project Container**). Open `base_pi` in a separate VS Code window (spins up the **Harness Container**).
-2. **Execute Code/Tests:** Ask pi to run tests; it will automatically delegate execution via `pi-run my-project python -m pytest`.
-3. **Edit Files:** Ask pi to create code files; it writes them directly to `/workspaces/my-project/`, which instantly syncs to the project container via the bind-mount.
+1. **Start the Session:** Open `congruent_roster` in a VS Code window (spins up the **Project Container**). Open `base_pi` in a separate VS Code window (spins up the **Harness Container**).
+2. **Execute Code/Tests:** Ask pi to run tests; it will automatically delegate execution via `pi-run congruent_roster python -m pytest`.
+3. **Edit Files:** Ask pi to create code files; it writes them directly to `/workspaces/congruent_roster/`, which instantly syncs to the project container via the bind-mount.
 4. **Stop the Session:** Close both VS Code windows to gracefully shut down both containers.
 
 ---
