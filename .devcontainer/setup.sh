@@ -81,7 +81,8 @@ ln -s "$STORE/git/github.com" "$WS/.pi/git/github.com"
 # symlink, but npm needs a clean prefix (updateNpmBatch does no pre-clean and
 # npm can't see versions dropped from the store).
 rm -rf "$STORE/npm"/*
-rm -rf "$STORE/git/github.com" 2>/dev/null || true   # keep tracked .pi/git/.gitignore
+# Clean the contents of github.com instead of deleting the directory
+rm -rf "$STORE/git/github.com/"*
 pi update --extensions --approve
 git config --global user.email "nirgrahamuk@gmail.com"
 git config --global user.name "nirguk"
