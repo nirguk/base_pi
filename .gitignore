@@ -22,3 +22,7 @@ pi-llm-debugging/
 # stay in the index; the symlinks themselves are container-local artifacts)
 .pi/npm
 .pi/tmp/
+
+# llm debug payloads (runtime, never commit)
+pi_perf/llm-debug.sqlite
+*.sqlite
