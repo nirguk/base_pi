@@ -39,7 +39,7 @@
     "npm:pi-web-access@0.28.0",
     {
       "source": "npm:pi-subagents@0.66.0",
-      "extensions": []
+      "extensions": ["*"]
     },
     "git:github.com/nirguk/pi-session-analyzer@b549aa9e494a7440dca065e2cf796544b0ec0f69",
     "git:github.com/nirguk/pi-llm-debugging@e530e0d19cb93b03957ee1d6906d3cd86c46bfcf",
