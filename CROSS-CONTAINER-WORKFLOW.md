@@ -10,6 +10,21 @@
 > being wired up; it is an example entry in the registry, not a special case.
 > See "Adding More Projects" below for how other projects plug in.
 
+## File Ownership: Harness Runs as `vscode` (UID 1000)
+
+> Live behavior (tracked in [`pi-as-vscode-change-plan.md`](pi-as-vscode-change-plan.md)).
+
+Harness pi runs as uid/gid **1000** (`remoteUser: "vscode"`) — the same uid as the
+project container's editor user — so files pi creates on the shared bind-mount are
+owned by uid 1000 and immediately editable from the project container's VS Code.
+The harness no longer writes as root. Root survives only behind passwordless sudo,
+and exclusively for Docker socket ops: `pi-run` / `pi-projects` shell out via
+`sudo -n docker <...>`. The socket itself stays root-only (`srw-rw----`); never
+chmod/chown it (chmod = host footgun, chown mutates the host inode). One-time
+chowns are now deterministic: `setup.sh` re-applies `chown -R vscode:vscode` to
+the workspace, `/opt/pi-npm-store`, and `/home/vscode/.pi` on every (re)build,
+since the extension store is recreated root-owned each build.
+
 ## Overview & Terminology
 
 This setup keeps two separate devcontainers connected via a shared host directory. Pi runs in the harness container and executes commands in the project container via `docker exec`.

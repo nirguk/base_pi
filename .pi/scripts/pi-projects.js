@@ -93,7 +93,7 @@ if (require.main === module) {
         for (const [alias, info] of Object.entries(registry)) {
             let isRunning = false;
             try {
-                const res = execSync(`docker inspect -f '{{.State.Running}}' ${info.container}`, { encoding: 'utf8' });
+                const res = execSync(`sudo -n docker inspect -f '{{.State.Running}}' ${info.container}`, { encoding: 'utf8' });
                 isRunning = res.trim() === 'true';
             } catch (e) {
                 isRunning = false;

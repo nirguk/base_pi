@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 set -e
+
+# Self-elevate to root when invoked as non-root. postCreateCommand runs as
+# remoteUser (vscode once the harness runs as UID 1000); apt, npm install -g,
+# chown and the extension-store population all need root. Dockerfile/RUN and
+# already-root invocations hit `id -u == 0` and pass straight through.
+if [ "$(id -u)" != "0" ]; then
+  echo "[setup] not root; re-executing as root via sudo"
+  exec sudo -n /workspaces/base_pi/.devcontainer/setup.sh "$@"
+fi
+
 exec > >(tee /workspaces/base_pi/setup_debug.log) 2>&1
 export COLUMNS=120
 export LINES=40
@@ -201,6 +211,37 @@ echo "[setup] npm store verified populated (pinned npm packages resolve)."
 # module) globally on PATH inside the harness.
 ln -sf "$WS/.pi/scripts/pi-run" /usr/local/bin/pi-run
 ln -sf "$WS/.pi/scripts/pi-projects.js" /usr/local/bin/pi-projects
+
+# ---------------------------------------------------------------------------
+# UID 1000 (vscode) ownership alignment
+# The harness runs as vscode (remoteUser), so pi-created files in the shared
+# bind-mount land as uid 1000 and are editable from project containers whose
+# editor user is also 1000. This block re-runs on every build, so ownership is
+# deterministic after each rebuild -- even when the extension store is
+# recreated root-owned.
+
+# 1. Migrate .pi config/trust state from root to vscode
+if [ -d "/root/.pi" ]; then
+    mkdir -p /home/vscode/.pi
+    cp -r /root/.pi/* /home/vscode/.pi/ 2>/dev/null || true
+fi
+
+# 2. Chown required directories
+for DIR in "$WS" /opt/pi-npm-store /home/vscode/.pi; do
+    if [ -d "$DIR" ]; then
+        chown -R vscode:vscode "$DIR"
+    fi
+done
+
+# 3. Chown required binaries/scripts
+for FILE in /usr/local/bin/pi-run /usr/local/bin/pi-projects; do
+    if [ -f "$FILE" ]; then
+        chown vscode:vscode "$FILE"
+    fi
+done
+
+# Ensure vscode owns their home directory completely
+chown -R vscode:vscode /home/vscode
 
 echo "[setup] Pi.dev environment ready."
 

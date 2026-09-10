@@ -49,11 +49,11 @@ CONTAINER_NAME=$(echo "$RESOLVED" | cut -d'|' -f1)
 PROJECT_PATH=$(echo "$RESOLVED" | cut -d'|' -f2)
 
 # Verify container running state
-if ! docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep -q 'true'; then
+if ! sudo -n docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep -q 'true'; then
   echo "Error: container '$CONTAINER_NAME' (alias: '$PROJECT_ALIAS') is not running" >&2
   echo "Open the project in VS Code to start its devcontainer first." >&2
   exit 1
 fi
 
-# Execute command inside target container
-exec docker exec -w "$PROJECT_PATH" "$CONTAINER_NAME" "$@"
+# Execute command inside target container (sudo: socket is root-only)
+exec sudo -n docker exec -w "$PROJECT_PATH" "$CONTAINER_NAME" "$@"
