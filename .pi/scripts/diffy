@@ -1,0 +1,136 @@
+#!/bin/sh
+# diffy — pretty diff of any two text files (the .qmd/.qmd extension is incidental).
+#
+# Terminal-oriented by default: side-by-side (git-delta). Switch to inline
+# (diff-so-fancy) or generate a self-contained HTML file.
+#
+# Usage:
+#   diffy [options] <FROM> <TO>
+#
+# Options:
+#   -s, --side            side-by-side terminal view (default, git-delta)
+#   -i, --inline          inline terminal view (diff-so-fancy)
+#   -h, --html            generate a self-contained HTML file
+#   -o, --out <path>      output file for --html (default .pi/diffout/<FROM>__vs__<TO>.diff.html)
+#   -n, --side-by-side    long alias for --side (kept for readability)
+#   --help                show this help
+#
+# Exit codes (all views): 0 identical · 1 diff · 2 usage · 3 bad input · 4 internal.
+#
+# --out/-o is only meaningful for --html; it is rejected (exit 2) for terminal views
+# so a caller can't silently believe output went somewhere.
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROG="$(basename "$0")"
+
+help() {
+    cat >&1 <<EOF
+$PROG — pretty diff of any two text files.
+
+Usage:
+  $PROG [options] <FROM> <TO>
+
+Options:
+  -i, --inline        inline terminal view (diff-so-fancy)
+  -h, --html          generate a self-contained HTML file
+  -s, --side          side-by-side terminal view (default; git-delta)
+  -o, --out <path>    destination for --html
+  -n, --side-by-side  alias for --side
+      --help          show this help
+
+Default (no view flag): side-by-side terminal view.
+
+Exit codes: 0 identical · 1 diff · 2 usage · 3 bad input · 4 internal
+EOF
+}
+
+# Defaults
+VIEW="side-by-side"
+OUT=""
+FROM=""
+TO=""
+
+# --- Parse flags (no getopt dependency) ---
+n=0
+err=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --help)
+            help
+            exit 0
+            ;;
+        -i|--inline)
+            VIEW="inline"
+            ;;
+        -h|--html)
+            VIEW="html"
+            ;;
+        -s|--side|--side-by-side|-n)
+            VIEW="side-by-side"
+            ;;
+        -o|--out)
+            shift
+            if [ "$#" -ge 1 ]; then
+                OUT="$1"
+            else
+                err="--out/-o requires a destination path (e.g. -o /tmp/diff.html)"
+                break
+            fi
+            ;;
+        -*)
+            err="unknown option: '$1' (try --help)"
+            break
+            ;;
+        *)
+            if [ "$n" -eq 0 ]; then
+                FROM="$1"
+            elif [ "$n" -eq 1 ]; then
+                TO="$1"
+            else
+                err="too many positional arguments (expected exactly <FROM> <TO>)"
+                break
+            fi
+            n=$((n+1))
+            ;;
+    esac
+    shift
+done
+
+fail() {
+    echo "$PROG: $1" >&2
+    echo "$PROG: try '$PROG --help'" >&2
+    exit 2
+}
+
+[ -n "$err" ] && fail "$err"
+
+# --- Arity ---
+if [ "$n" -lt 2 ]; then
+    if [ "$n" -eq 0 ]; then
+        fail "expected <FROM> and <TO> (got none)"
+    else
+        fail "expected <FROM> and <TO> (got $n operand)"
+    fi
+fi
+
+# --- Reject --out/-o for terminal views ---
+if [ "$VIEW" != "html" ] && [ -n "$OUT" ]; then
+    fail "output file (-o/--out) is only valid with --html (terminal views print to stdout)"
+fi
+
+# --- Route to the chosen renderer ---
+case "$VIEW" in
+    html)
+        if [ -n "$OUT" ]; then
+            exec node "$SCRIPT_DIR/_diffy-html.mjs" --out "$OUT" "$FROM" "$TO"
+        else
+            exec node "$SCRIPT_DIR/_diffy-html.mjs" "$FROM" "$TO"
+        fi
+        ;;
+    side-by-side)
+        exec "$SCRIPT_DIR/_diffy-delta" "$FROM" "$TO"
+        ;;
+    inline)
+        exec "$SCRIPT_DIR/_diffy-sofancy" "$FROM" "$TO"
+        ;;
+esac
