@@ -24,7 +24,7 @@ pi-llm-debugging/
 # stay in the index; the symlinks themselves are container-local artifacts)
 .pi/npm
 .pi/tmp/
-
+# diff-tooling displaced to pi-diffy extension (superseded) — no longer local
 # llm debug payloads (runtime, never commit)
 pi_perf/llm-debug.sqlite
 *.sqlite
