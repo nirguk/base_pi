@@ -8,6 +8,8 @@ pi-llm-debugging/
 
 # pi-web-access runtime cache
 .pi/pi/web-search-cache/
+# pi-web-access provider config (local: contains container-specific base URL/SSRF)
+.pi/web-search.json
 .pi/pulse/
 .pi/sessions
 .pi/web-search-cache
