@@ -49,8 +49,7 @@
     {
       "source": "git:github.com/nirguk/pi-subagents-deferred@9e50ea7a3c11fed92420ff9cc2e644fef2e8b353",
       "extensions": []
-    },
-    "npm:pi-effort"
+    }
   ],
   "skills": [
     "s",
@@ -58,7 +57,5 @@
   ],
   "lastChangelogVersion": "0.85.1",
   "theme": "dark",
-  "pi-effort": {
-    "fastMode": false
-  }
+  "hideThinkingBlock": false
 }
