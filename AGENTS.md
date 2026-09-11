@@ -150,6 +150,40 @@ node -e "const fs=require('fs'); const f=fs.readFileSync('data.json','utf8'); co
 - **Use `read` over `cat`/`sed`** — handles truncation gracefully and supports offset/limit for large files.
 - **Check `~/.pi/agent/AGENTS.md`** for global tips that apply across all projects.
 
+### Subagents & orchestration — quick rules
+
+- **Match the prompt to agent tools.** `reviewer` is read-only (it has no shell, so it can't run anything). `scout`/`freshworker` have a shell and are the ones that execute. When a read-only reviewer needs a runtime fact, have it list the exact command a shell-capable agent should run and gate its verdict on that check.
+- **Builders self-test as a gate.** A `freshworker` task is done when it has executed the tool and pasted stdout + exit codes for the edge cases in the task. If it hasn't run anything, treat the deliverable as not yet submitted.
+- **Two-tier verification.** Executable artifacts get a *static* read-only review (structure, resolve, exit contract) and an *exec smoke* on a shell-capable agent — two separate checks, both bounded.
+- **Bound reviewers.** Give a static reviewer a specific file list and a token/turn budget, so it does not wander into vendor internals, source maps, or lockfiles. If a behavior needs running, route that to a separate smoke runner.
+- **Orchestrator must decide.** Each workflow's return step lists per strand: ship / needs-loop(reason+exact-feedback). Treat a crashed child as a needs-loop; validate workflow variable names up front to avoid `ReferenceError` loops.
+- **Backticks stay literal.** Build child task text as plain-string arrays joined with newlines, not JS template literals — a backtick inside the task (command examples, inline code) would terminate the outer literal and crash the whole `workflowScript` before any child runs.
+- **Presence checks**: for "is X installed", check all real candidate paths (nvm global, /usr, /usr/local, ./bin); a single dpkg search can miss a tool installed elsewhere and yields a false negative.
+- **Lane machinery contracts**: `resume` and a different `agent` are mutually exclusive (worker→reviewer crosses via task text, not session resume); only give `outputSchema` to agents that return `structured_output` (prose-verdict `reviewer` must not get one); bind the precise field (`worker.structuredOutput.evidence`), not the whole object, or it stringifies to `[object Object]`; reviewer providers can `terminated` mid-run — restart once or split the review into narrower subtasks.
+- **Ordering (lean)**: run the worker's known deterministic pass/fail command (`run X → expect exit 1`) as an exec-smoke *first*, then let the static reviewer reason about an already-run artifact; re-smoke only for a genuinely novel command the reviewer declares (`gated-on-<cmd>`). Reserve a heavier two-stage reviewer (read-only stage-1 → bash-capable stage-2) for code with real runtime branching.
+- **Trivial-strand exemption**: for a handful of shell lines, a full parallel `reviewer` fanout is overkill — a single cheap static pass plus the bounded exec-smoke worker suffices; save heavy reviewers for real branching.
+
+#### Prompt patterns (ready to paste)
+
+**Static reviewer** (read-only `reviewer`):
+```
+Your job: inspect the reviewed source and report every concrete blocker you find.
+Work from the source file(s) only — read the exact paths you were given and what
+they directly depend on; that scope is enough to judge structure and contract.
+You cannot execute anything, so if a fact can only be proven by running, say the
+exact command a shell-capable agent must run and mark your verdict as
+gated-on-that-check.
+```
+
+**Builder self-test gate** (shell-capable `freshworker`):
+```
+MANDATORY SELF-TEST GATE — before declaring done you MUST execute the tool against
+the real inputs shown below and paste exact stdout + exit codes for:
+  (1) two different files, (2) a file with itself (identical), (3) writing to --out.
+If any case fails, keep fixing until all pass. An untested deliverable is a FAILED
+deliverable. Also state the one runtime command the user/reviewer will run.
+```
+
 ## Project Container Workflow (cross-container)
 
 Project code may live in separate project devcontainers (e.g. `congruent_roster`)

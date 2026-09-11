@@ -57,7 +57,7 @@
       "source": "git:github.com/nirguk/pi-subagents-deferred@9e50ea7a3c11fed92420ff9cc2e644fef2e8b353",
       "extensions": []
     },
-    "git:github.com/nirguk/pi-diffy@v0.1.1"
+    "git:github.com/nirguk/pi-diffy@v0.2.0"
   ],
   "skills": [
     "s",
