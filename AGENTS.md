@@ -154,12 +154,10 @@ node -e "const fs=require('fs'); const f=fs.readFileSync('data.json','utf8'); co
 
 Project code may live in separate project devcontainers (e.g. `congruent_roster`)
 rather than inside this harness. Pi operates from the harness container and does
-not run inside the project container. See `CROSS-CONTAINER-WORKFLOW.md` and
-`cross-container-action-plan.md` for the full pattern.
+not run inside the project container. See `CROSS-CONTAINER-WORKFLOW.md` for the
+full pattern.
 
-**Status:** the tooling below lands from `cross-container-action-plan.md`; it is
-fully usable once the harness has a docker CLI + socket mount (Phase 5 rebuild)
-and the target project's container is running (opened in VS Code).
+**Prereq:** the target project's container must be running (opened in VS Code).
 
 - **To execute commands** (tests, builds, scripts) inside a project container:
   ```bash
@@ -167,9 +165,10 @@ and the target project's container is running (opened in VS Code).
   ```
   Examples:
   ```bash
-  pi-run congruent_roster python -m pytest
-  pi-run congruent_roster pip install -e .
+  pi-run congruent_roster python3 -m pytest
+  pi-run congruent_roster uv pip install -e .
   ```
+  (project containers expose `python3`, not `python`)
 - **Manage registered projects:**
   ```bash
   pi-projects list                 # alias / container / path / running status
