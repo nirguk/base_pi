@@ -193,6 +193,14 @@ full pattern.
 
 **Prereq:** the target project's container must be running (opened in VS Code).
 
+- **Step 1 — read the target repo's root `README.md` BEFORE operating on it.**
+  It is the ground truth for that project's toolchain and conventions (is it
+  uv-managed, a Node/npm project, a plain venv, a Go/Cargo workspace …?) and
+  should orient any agent dropped into the container. Never assume a vanilla
+  toolchain from the harness side: e.g. a uv-managed project must be run with
+  `pi-run <alias> uv run …`, not by poking its `.venv` directly. When the harness
+  needs runtime facts about the container, fold this read into the
+  `scout`/`freshworker` task you delegate to that container.
 - **To execute commands** (tests, builds, scripts) inside a project container:
   ```bash
   pi-run <project-alias> <command...>

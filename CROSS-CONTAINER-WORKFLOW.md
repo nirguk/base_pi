@@ -18,7 +18,15 @@ a shared bind-mount and executes commands inside the project container via
 
 ## How to use
 
-1. **Start a session** — open the project repo in a VS Code window (spins up the
+0. **Read the target repo's root `README.md` first.** It is the authoritative
+   source for that project's toolchain and conventions — do NOT assume a vanilla
+   setup from the harness side. The core facts that orient any agent (uv-managed?
+   Node/npm? plain venv? build system?) belong in that README and should be
+   extracted before executing anything. A project-managed venv (e.g. uv) must be
+   run via its own tool (`uv run …`), never by invoking its `.venv` binaries
+   directly. Check the README (and `pyproject.toml`/`package.json`) to learn the
+   toolchain first.
+1. **Start a session** — open the project repo in a separate VS Code window (spins up the
    project container), `base_pi` in another (harness). The project container must
    be running before `pi-run` works.
 2. **Execute commands inside a project container:**
