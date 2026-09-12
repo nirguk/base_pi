@@ -7,7 +7,10 @@
   "remoteUser": "vscode",
   "mounts": [
     "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
-    "source=${localEnv:BASE_FOLDER}/congruent_roster,target=/workspaces/congruent_roster,type=bind"
+    "source=${localEnv:BASE_FOLDER}/congruent_roster,target=/workspaces/congruent_roster,type=bind",
+    "source=${localEnv:BASE_FOLDER}/nirgraham_career,target=/workspaces/nirgraham_career,type=bind",
+    "source=${localEnv:BASE_FOLDER}/penpalagent,target=/workspaces/penpalagent,type=bind",
+    "source=${localEnv:BASE_FOLDER}/pi-audit,target=/workspaces/pi-audit,type=bind"
   ],
   "runArgs": [],
   "features": {
@@ -23,7 +26,7 @@
     }
   },
   "containerEnv": {
-    "GEMINI_API_KEY": "${localEnv:GEMINI_API_KEY}",
+    "BASE_FOLDER": "${localEnv:BASE_FOLDER:-/workspaces}",
     "OPENROUTER_API_KEY": "${localEnv:OPENROUTER_API_KEY}",
     "INCEPTION_API_KEY": "${localEnv:INCEPTION_API_KEY}",
     "GH_TOKEN" : "${localEnv:GITHUB_PAT_TOKEN}",
