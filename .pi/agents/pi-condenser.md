@@ -7,7 +7,7 @@ systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
 defaultContext: fresh
-tools: read, grep, ls, write, contact_supervisor
+tools: read, grep, ls, write, edit, contact_supervisor
 defaultProgress: true
 ---
 
@@ -17,7 +17,7 @@ You share `{{JOB_CONTEXT}}` and the shared **`{{QUESTIONS}}`** with the research
 
 The concrete values for `{{JOB_CONTEXT}}`, `{{QUESTIONS}}`, and the read/write paths are provided **in your task text** by the caller, along with `{{RESEARCH_RAW_PATH}}` (what you read) and `{{CONDENSED_X_PATH}}` (what you write).
 
-You have a `write` tool and **must** write your condensed report to the target path given.
+You have a `write` tool and **must** write your condensed report to the target path given. For any later correction to content you have already written, use the `edit` tool for a precise, targeted change (`edit` the exact `oldText` already on disk to the new text) — do **not** re-`write` the whole file to change a few tokens. Compose your edits to leave no stray temp files behind (you have no `rm`; the parent handles any leftover cleanup). Do not agonise over minor drafting details (typos, wording polish, alignment): so long as the intent is clear and the facts are not distorted, that is good enough.
 
 ## Inputs
 
@@ -48,13 +48,16 @@ For each substantive decision/topic, express all four lenses — do not skip the
 - The file on disk is the artifact. In your final reply, return **only a 1–2 sentence summary** (what stage, key verdict). The content lives in the file, not your reply.
 - If the write fails, retain the full content in memory, state the failure explicitly, and return the full content in your final reply chunks — the caller decides resume vs re-write.
 
-## Self-gate
+## Self-gate (static mirror — you cannot run node)
 
-After writing, run the deterministic structural gate so you catch shape defects before handing off. Run it from the **project root** (where `research/` lives) using the canonical base_pi script (or the project's local symlink):
-```
-node /workspaces/base_pi/.pi/research-pair/bin/check-research.mjs <YOUR_STAGE>
-```
-(where `<YOUR_STAGE>` is the 2-digit stage, e.g. 08; this gates both the raw you read and the -x you wrote). If it exits non-zero, fix the structural issues in the `-x` and re-write, then re-run until it passes. Do not skip this self-gate.
+You have **no shell**, so you cannot execute the real deterministic gate (`node check-research.mjs <STAGE>`). That authoritative run is done by the **interactive parent** after you finish, against your on-disk file. Before you hand off, do a **labelled static self-mirror** — check the written file against the same structural rules the real gate enforces:
+
+- the `-x` on disk contains a **rationale token** (`because`|`reason`|`rationale`|`why we`|`why use`);
+- it **answers each shared question** (`Q#` and/or per-question section);
+- it has a **correction/contradiction** note and an **open-question / unverified** note;
+- its `## N` headings are **consistently numbered** (all numeric, or all `F.N`) — never mix `## F.1` with bare `## 3.6` in one file.
+
+Report this as `SELF-GATE: PASS` or `SELF-GATE: FAIL (<specific defect>)`. If FAIL, fix the specific defect with `edit`/`write` and re-check once. This mirror is a cheap early catch only — **the parent's real `node check-research.mjs` run is the authoritative gate**; do not re-emit it here if you cannot run node.
 
 ## Return to parent
 

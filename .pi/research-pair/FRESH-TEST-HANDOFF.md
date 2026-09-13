@@ -12,15 +12,23 @@ condenser -> gate(RAW + -x). Use the installed pi agents
 ## The one hard constraint (learned)
 `runs.host` (the only in-flight way to shell out) is UNAVAILABLE inside a
 subagent workflow runner — both background and blocking. So the **gate steps
-must be run by the interactive parent (you, in the main session)**, not inside
+must be run by the parent (you, in the main session)**, not inside
 the workflowScript. Two already-proven ways:
 
-- Have each agent self-gate by emulating `check-research.mjs` string checks
-  (they already do this, but they CANNOT execute node themselves).
-- The parent runs the gate on the real artifact after each leg (see Steps).
+- Have each agent self-gate via a **labelled static mirror** of the gate's
+  structural checks, emitting `SELF-GATE: PASS` or `SELF-GATE: FAIL (<defect>)`
+  (they cannot execute node — no shell in their toolset). Both agent prompts
+  now contain this contract (see `.pi/agents/pi-researcher.md` / `pi-condenser.md`).
+- The parent runs the real gate on the artifact after each leg (see Steps) —
+  the authoritative run.
+
+> The condenser now also has `edit` (and dropped `rm`, which is not a pi
+built-in tool — see the note below) and a “don’t agonise over minor
+drafting” clause (in `pi-condenser.md`), so it should stop the full-file
+rewrite spiral this round’s test is checking.
 
 ## Steps
-1. Pick a fresh temp dir, e.g. `/workspaces/pi-audit/research-pair-test3`.
+1. Pick the **next fresh, unused** temp dir under `/workspaces/pi-audit/`, e.g. `/workspaces/pi-audit/research-pair-test5` (test3 and test4 are already used).
 2. Run `pi-researcher` (agent) with a task that injects the placeholders
    below. It writes a RAW research file (>= 100 lines) to RESEARCH_RAW_PATH.
 3. Parent: run the real gate to confirm RAW PASS (exit 0).
@@ -34,6 +42,18 @@ the workflowScript. Two already-proven ways:
    ```bash
    RESEARCH_DIR=/workspaces/pi-audit/<tempdir> node /workspaces/base_pi/.pi/research-pair/bin/check-research.mjs 01
    ```
+   Observation to fold back: whether the condenser now uses `edit`
+   instead of full-file reset-writes (fewer tool calls) and stays glued to the
+   “don’t agonise over minor drafting details” rule (fewer iterates). The parent
+   real gate remains the only gate of record for advancing.
+
+> **`rm` is NOT a pi built-in tool** (the built-ins are read, bash, powershell,
+edit, write, grep, find, ls). Listing `rm` in a subagent’s `tools:` allowlist
+aborts the whole run at spawn with “requested unavailable child tools: rm” —
+even if the agent never calls it. It has been removed from
+`.pi/agents/pi-condenser.md`. The condenser composes edits to leave no stray
+files, and the interactive parent does any leftover `rm` cleanup outside the
+child. (Validated in test5: the condenser never actually needed `rm`.)
 
 
 ## Placeholders (inject per run)

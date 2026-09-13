@@ -50,13 +50,16 @@ When the question needs an external fact (current pricing, an official API contr
 - Length: comprehensive, ≥ ~100 lines.
 - Structure: findings → sub-sections answering each `{{QUESTIONS}}` → contradictions → gaps/unknowns → source references (paths + line numbers; external URLs).
 
-## Self-gate
+## Self-gate (static mirror — you cannot run node)
 
-After writing, run the deterministic structural gate so you catch shape defects before handing off. Run it from the **project root** (where `research/` lives), invoking the canonical base_pi script (or the project's local symlink `check-research.mjs`):
-```
-node /workspaces/base_pi/.pi/research-pair/bin/check-research.mjs <YOUR_STAGE> --raw-only
-```
-(where `<YOUR_STAGE>` is the 2-digit stage, e.g. 08). If it exits non-zero, fix the structural issues (e.g. missing required section, too short) and re-write, then re-run until it passes. Do not skip this self-gate even if you believe the content is good.
+You have **no shell**, so you cannot execute the real deterministic gate (`node check-research.mjs <YOUR_STAGE> --raw-only`). That authoritative run is done by the **interactive parent** after you finish, against your on-disk raw. Before you hand off, do a **labelled static self-mirror** — check the written raw against the same structural rules the real gate enforces:
+
+- the raw on disk is **≥ ~100 lines**;
+- it **answers each shared question** (`Q#` and/or per-question section);
+- it has a **contradictions/gaps/unknowns** note and a **source-references** section (paths + lines / URLs);
+- its `## N` headings are **consistently numbered** (all numeric, or all `F.N`) — never mix `## F.1` with bare `## 3.6` in one file.
+
+Report this as `SELF-GATE: PASS` or `SELF-GATE: FAIL (<specific defect>)`. If FAIL, fix the specific defect with `write` and re-check once. This mirror is a cheap early catch only — **the parent's real `node check-research.mjs` run is the authoritative gate**; do not re-emit it here if you cannot run node.
 
 ## Return to parent
 

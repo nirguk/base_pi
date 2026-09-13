@@ -23,8 +23,7 @@ with verifiable artifacts (raw + condensed `-x`), for projects that need per-sta
   `-x`** (30–50% is a *hope*, not a gate), keeping *why* (why-care / approach / decisions &
   rationale / open questions). A human can review the whole `-x` without touching raw.
 - **Deterministic gate** (`check-research.mjs` / `run-stage.mjs`) — validates **structure**
-  (exists, length, sections, ratio-note) **without reading content into model context**. Both
-  agents self-gate after writing. Ratio is a note, not a fail.
+  (exists, length, sections, ratio-note) **without reading content into model context**. The **parent runs** it after each leg (authoritative); both agents emit a static self-mirror of its checks as a cheap early catch. Ratio is a note, not a fail.
 
 ## Placement & relationships
 
@@ -70,7 +69,7 @@ This is the design response to: quality of research + context hygiene + reproduc
   Reverted.) Checker reports out-of-range only as a note.
 - **Write-to-disk, not reply-code-block** — recovery = checkable artifact (file exists/non-empty),
   and the `-x` stays out of the main model context.
-- **Deterministic self-gate** — each agent runs `check-research.mjs` after writing and iterates.
+- **Deterministic gate = parent-run, authoritative.** The real `node check-research.mjs` runs in the **interactive parent** (the only component with a shell) after each leg. The agents do **not** execute `node` (no shell in their toolset); their per-agent **self-gate is a labelled static mirror** of the gate's structural checks, re-emitted only as PASS/FAIL to catch cheap early defects. The parent's run is the gate of record.
 - **Numbering drift in `##` headers is OK / cosmetic** — not a gate; downstream can parse.
   (Exception not needed: as long as a single file's numeric `## N` headers stay consistent, the
   `inconsistent_section_numbering` check passes; mixing `## F.1` and `## 3.6` in one file fails.)
