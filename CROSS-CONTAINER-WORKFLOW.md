@@ -10,9 +10,10 @@ a shared bind-mount and executes commands inside the project container via
 
 | Piece | Where / What |
 |---|---|
-| `pi-run` | `base_pi/.pi/scripts/pi-run` (bash). Executes a command inside a registered project container. Symlinked to `/usr/local/bin/pi-run` by `setup.sh`. Uses `sudo -n docker` (the socket is root-only). |
-| `pi-projects` | `base_pi/.pi/scripts/pi-projects.js` (Node, zero deps). Registry CLI: `register \| deregister \| list`. Symlinked to `/usr/local/bin/pi-projects`. Also exports `what_projects()` for extensions. |
-| Registry | `base_pi/.pi/projects.json` — maps `<alias> → { container, path }`. Runtime state, gitignored. `pi-run` falls back to `alias`/`/workspaces/<alias>` if unregistered. |
+| `pi-run` | `base_pi/.pi/scripts/pi-run` (bash). Executes a command inside a registered project container. Symlinked to `/usr/local/bin/pi-run` by `setup.sh`. Uses `sudo -n docker` (the socket is root-only). Resolves the live container via `resolveContainer()` (see `pi-projects`). |
+| `pi-projects` | `base_pi/.pi/scripts/pi-projects.js` (Node, zero deps). Registry CLI: `register \| deregister \| list \| resolve`. Symlinked to `/usr/local/bin/pi-projects`. Exports `what_projects()` and `resolveContainer()` for extensions. |
+| Registry | `base_pi/.pi/projects.json` — maps `<alias> → { container, path }`. Runtime state, gitignored. The stored `container` name is a **hint, not authoritative**: Docker assigns a fresh transient name each devcontainer boot, so resolution falls through to the stable image name (below). |
+| Image-based resolution | Devcontainer images follow the stable convention `vsc-<alias>-*` (e.g. `vsc-pi-audit-…`). `resolveContainer()` tries the stored name first, then matches a container by that image (preferring a running one). This makes `pi-run`/`list` survive container renames across reboots without re-registering. |
 | Bind mount | Project path `/workspaces/<project>` is mounted into both containers; writes from the harness sync instantly. |
 | Registered projects | `pi-projects list` for the current set (contains `congruent_roster`). |
 
@@ -38,8 +39,9 @@ a shared bind-mount and executes commands inside the project container via
    > …` if the project has a venv/`uv.lock`.
 3. **Manage registered projects:**
    ```bash
-   pi-projects list                 # alias / container / path / running status
-   pi-projects list --json          # machine-readable
+   pi-projects list                 # alias / LIVE container / path / running status
+   pi-projects list --json          # machine-readable (includes stored + resolved name)
+   pi-projects resolve <alias>      # print the live {name, path, resolved, via} for one alias
    pi-projects register <alias> <container-name> [/path]
    pi-projects deregister <alias>
    ```
@@ -57,15 +59,22 @@ a shared bind-mount and executes commands inside the project container via
 2. `pi-projects register <project> <container-name> /workspaces/<project>`.
 3. Use `pi-run <project> <command>`; files at `/workspaces/<project>`.
 
-Container resolution is by registry name; prefer a pinned name (`--name` in the
-project's devcontainer runArgs) so the registry survives rebuilds. If a rebuild
-renamed the container, re-`register` (or fall back to matching the devcontainer
-label `devcontainer.local_folder`.
+Container resolution: `pi-run`/`pi-projects` call `resolveContainer(alias)`, which
+(1) uses the registry's stored container name if that container is running,
+(2) otherwise matches a container by its stable devcontainer image `vsc-<alias>-*`
+(preferring a running match), and (3) only if neither resolves, reports the stored
+name as not-running. Because Docker assigns a fresh transient name each boot, the
+stored name routinely goes stale — the image fallback is what keeps `pi-run`
+working without re-registering. Pinning `--name` in the project's devcontainer
+runArgs is still a nice-to-have for deterministic names, but is no longer required
+for correctness. New aliases still need a registry entry (or an `alias` whose
+image follows the `vsc-<alias>-*` convention) and a bind-mount of `/workspaces/<alias>`.
 
 ## Troubleshooting
 
 - **`pi-run` says container not running** — the project's devcontainer isn't up;
-  open the project window in VS Code first.
+  open the project window in VS Code first. (Resolution already falls back to the
+  `vsc-<alias>-*` image name, so a stale registry name alone is no longer a cause.)
 - **Permission denied on docker socket** — `pi-run`/`pi-projects` shell out via
   `sudo -n docker`; the socket stays root-only. Never `chmod`/`chown` it.
 - **Files appear empty from inside the container** — host path in the

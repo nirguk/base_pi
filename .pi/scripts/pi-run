@@ -9,9 +9,10 @@
 #   pi-run congruent_roster pip install -e .
 #   pi-run congruent_roster python src/main.py
 #
-# Resolves <alias> -> (container, path) via the registry at
-# /workspaces/base_pi/.pi/projects.json (maintained by `pi-projects`);
-# falls back to alias == container name and /workspaces/<alias>.
+# Resolves <alias> -> (container, path) via /workspaces/base_pi/.pi/projects.json
+# (maintained by `pi-projects`), with dynamic fallback to the devcontainer image
+# convention `vsc-<alias>-*` so Docker's transient random container names do not
+# break resolution across reboots. See pi-projects.js `resolveContainer()`.
 #
 # Prerequisite: the target container must be running (opened in VS Code).
 
@@ -26,33 +27,29 @@ if [ -z "$PROJECT_ALIAS" ]; then
   exit 1
 fi
 
-REGISTRY_PATH="/workspaces/base_pi/.pi/projects.json"
+SCRIPTS_DIR="/workspaces/base_pi/.pi/scripts"
 
-# Resolve container name and path using Node
+# Resolve container name and path using the shared resolver in pi-projects.js.
 RESOLVED=$(node -e '
-const fs = require("fs");
-const alias = process.argv[1];
-const regPath = process.argv[2];
-if (fs.existsSync(regPath)) {
-    try {
-        const reg = JSON.parse(fs.readFileSync(regPath, "utf8"));
-        if (reg[alias]) {
-            console.log(`${reg[alias].container}|${reg[alias].path}`);
-            process.exit(0);
-        }
-    } catch(e) {}
-}
-console.log(`${alias}|/workspaces/${alias}`);
-' "$PROJECT_ALIAS" "$REGISTRY_PATH")
+const { resolveContainer } = require(process.argv[1]);
+const r = resolveContainer(process.argv[2]);
+console.log(`${r.name}|${r.path}|${r.resolved}|${r.via}`);
+' "$SCRIPTS_DIR/pi-projects.js" "$PROJECT_ALIAS")
 
 CONTAINER_NAME=$(echo "$RESOLVED" | cut -d'|' -f1)
 PROJECT_PATH=$(echo "$RESOLVED" | cut -d'|' -f2)
+RESOLVED_BOOL=$(echo "$RESOLVED" | cut -d'|' -f3)
+RESOLVED_VIA=$(echo "$RESOLVED" | cut -d'|' -f4)
 
 # Verify container running state
 if ! sudo -n docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep -q 'true'; then
   echo "Error: container '$CONTAINER_NAME' (alias: '$PROJECT_ALIAS') is not running" >&2
   echo "Open the project in VS Code to start its devcontainer first." >&2
   exit 1
+fi
+
+if [ "$RESOLVED_VIA" = "image" ]; then
+  echo "pi-run: resolved '$PROJECT_ALIAS' -> running container '$CONTAINER_NAME' (by image, stored name stale)" >&2
 fi
 
 # Execute command inside target container (sudo: socket is root-only)

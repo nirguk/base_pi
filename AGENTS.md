@@ -217,10 +217,20 @@ full pattern.
   ```bash
   pi-projects list                 # alias / container / path / running status
   pi-projects list --json          # machine-readable registry
+  pi-projects resolve <alias>      # print the live container/path for one alias
   pi-projects register <alias> <container-name> [/path]
   pi-projects deregister <alias>
   ```
   The registry lives at `.pi/projects.json` (runtime state, not committed).
+
+  **Container names are transient.** Docker assigns a fresh random name to each
+  devcontainer boot (e.g. `pi-audit` was `beautiful_jang`, then `admiring_mahavira`),
+  so the name stored in `projects.json` routinely goes stale. `pi-run` and
+  `pi-projects list` don't trust the stored name — `resolveContainer(alias)` tries
+  it first, then matches a container by its stable devcontainer image `vsc-<alias>-*`
+  (preferring a running match), and only reports the stored name when nothing
+  resolves. You do NOT need to re-register after a rebuild/rename; the image
+  fallback handles it.
 - **To read or write project files** directly (no container execution needed):
   access the bind-mounted path, e.g. `/workspaces/congruent_roster`. Writes sync
   to the project container instantly.
