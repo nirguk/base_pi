@@ -72,22 +72,53 @@ This is the design response to: quality of research + context hygiene + reproduc
   and the `-x` stays out of the main model context.
 - **Deterministic self-gate** — each agent runs `check-research.mjs` after writing and iterates.
 - **Numbering drift in `##` headers is OK / cosmetic** — not a gate; downstream can parse.
+  (Exception not needed: as long as a single file's numeric `## N` headers stay consistent, the
+  `inconsistent_section_numbering` check passes; mixing `## F.1` and `## 3.6` in one file fails.)
+- **`pi-condenser` also runs as a background child** — it needs `write` + `read` and consistent tool loading
+to mirror the researcher's spawn mode. The runbook's earlier "blocking" phrasing applied to the
+condenser as well and should be read as *background*.
 - **Keep raw ≥ ~100 lines; require section markers** (findings / questions / contradictions /
   gaps / sources) — tolerant of both `F.N` + `(Q#)` and `Q#` conventions.
 - **Q-numbers etc. cosmetic**: do not tune the prompts to enforce uniform `Q` headers.
 - **Researcher fresh-context, condenser fresh-context** (no inherited session chatter).
+- **Spawn both agents as background (`async: true`) children.** Both prompts require web/mcp tools
+  (`web_search`, `fetch_content`, `source_check`) in the researcher's allowlist, and ambient-extension
+  tools load **only** for background child agents. A foreground/blocking child gets none of those
+  tools and either aborts at spawn (unavailable-tool) or produces a web-less, structure-weakened raw.
+  The pipeline therefore *depends* on background mode for the agent legs. The real `check-research.mjs`
+  gate still runs in the **interactive parent** (which has a shell) after each leg — the agents cannot
+  execute `node`, so their self-gate is a static mirror of the gate's checks, and the parent's run is
+  the authoritative one.
+
+  **Corrected pattern (validated 2026-09-13):** the earlier guidance said spawn the researcher/condenser
+  as *blocking* (`async: false`) children. That is wrong — a foreground child does not load ambient
+  extensions, so the researcher's web tools are unavailable and the run aborts before writing. Use:
+
+  ```
+  spawn pi-researcher  (async: true / background)   # writes raw  (web tools load)
+  parent: node check-research.mjs NN --raw-only      # real gate, exit 0
+  spawn pi-condenser   (async: true / background)   # writes -x   (writes + reads locally)
+  parent: node check-research.mjs NN                # real gate, RAW + -x, exit 0
+  ```
+
+  Foreground is only acceptable when the agent's task requires **no** web/mcp tools (pure local
+  `read`/`grep`/`write`) — in which case keep those tools out of the task's allowlist/contract too.
 
 ## Run path (from `prompts/README.md`)
 
 ```
 node run-stage.mjs NN            # preconditions + gate + next steps
-spawn pi-researcher             # writes raw
+spawn pi-researcher (async/bg)  # writes raw   <- background: web tools load
 node run-stage.mjs NN --gate-only
-spawn pi-condenser               # writes -x
+spawn pi-condenser (async/bg)    # writes -x
 node run-stage.mjs NN --gate-only   # final gates raw + x
 ```
 
-See `prompts/README.md` (under `base_pi/.pi/research-pair/`) for the workflowScript + placeholder table. `AGENTS.md` (base_pi)
+> **Spawn both legs as BACKGROUND (`async: true`) children.** Foreground/blocking children do not
+> load ambient extensions, so the researcher's `web_search`/`source_check` tools are unavailable
+> (run aborts). The parent runs the real `check-research.mjs` gate after each leg.
+
+See `prompts/README.md` (under `base_pi/.pi/research-pair/`) for the placeholder table + spawn syntax. `AGENTS.md` (base_pi)
 carries a one-line pointer + invocation phrase.
 
 ## Future work (track here)

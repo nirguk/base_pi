@@ -55,15 +55,20 @@ the workflowScript. Two already-proven ways:
 ## Recommended driver (validated)
 Orchestrate directly from THIS interactive session rather than a workflowScript,
 when the live gate must run inside the flow:
-1. `subagent({ agent: "pi-researcher", task: <fill placeholders>, async: false })` -> writes RAW
+1. `subagent({ agent: "pi-researcher", task: <fill placeholders>, async: true })` -> writes RAW
 2. run bash gate: `RESEARCH_DIR=... node .../check-research.mjs 01 --raw-only`
-3. `subagent({ agent: "pi-condenser", task: <same placeholders>, async: false })` -> writes -x
+3. `subagent({ agent: "pi-condenser", task: <same placeholders>, async: true })` -> writes -x
 4. run bash gate: `RESEARCH_DIR=... node .../check-research.mjs 01`
 The interactive parent has a shell, so the gates run for real.
-(Do NOT `await runs.host(...)` inside a workflowScript - it aborts the run.)
+(Do NOT `await runs.host(...)` inside a workflowScript - it aborts the run. And do NOT spawn the
+agents as blocking/foreground - foreground children do not load ambient extensions, so the researcher's
+`web_search`/`source_check` tools go missing and the run aborts before writing. Use `async: true`.)
 
 ## Configuration gotchas to avoid
 - Agent has `grep` builtin, not `rg`. `tools: rg` rejects the whole agent run.
+- Spawn both agents with `async: true`. Foreground/blocking children load no ambient extensions →
+  the researcher's `web_search`/`source_check` are unavailable and the run aborts (unavailable-tool).
+  Foreground is fine only for a pure-local task with those tools stripped from the allowlist.
 - Gate resolves `research/` relative to cwd; run from the project root with `RESEARCH_DIR=` set.
 - If you *do* use a workflowScript (gate-less flow only), top-level `const`/`await`, NO import/export,
   no nested helpers, no templates in task strings; `subagent({ action: "validate", workflowScriptPath })` first.

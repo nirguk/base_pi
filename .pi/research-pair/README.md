@@ -67,10 +67,22 @@ If the gate FAILs after an agent, use the **resume** path below to have that age
 ## Orchestration steps (parent)
 
 1. **Inject** every `Required: yes` placeholder in both prompts with concrete values. Always set the two output paths yourself.
-2. **Spawn `researcher`** (front `runs.run` or subagent). It writes the raw file.
+2. **Spawn `pi-researcher` (background/`async: true`)** — foreground/blocking children do not extend their
+   ambient-extension web tools, so the researcher would abort. It writes the raw file.
 3. **Verify** `{{RESEARCH_RAW_PATH}}` exists and is non-empty.
-4. **Spawn `condenser`** with the raw path + `{{CONDENSED_X_PATH}}`.
+4. **Spawn `pi-condenser` (background/`async: true`)** — same background requirement.
 5. **Verify** `{{CONDENSED_X_PATH}}` exists and is non-empty.
+
+### Foreground/background gotcha
+
+- **Foreground child + web tool = abort.** A child spawned with `async: false` does not load ambient
+  extensions, so any `web_search` / `fetch_content` / `source_check` in its allowlist is unavailable and
+  pi marks the run failed before it does work (the tool description warns MCP/extension/web tools must run
+  as **background children**).
+- **Parent gates need a shell — the parent must be the interactive session, not a child.** That is why the
+  driver lives in the parent: only the parent can run `node check-research.mjs`.
+- **Foreground is acceptable only** for a pure-local task (no web tools in the allowlist/contract).
+  Otherwise stay in background mode.
 
 ### Minimal valid workflowScript (validated reference)
 
@@ -93,9 +105,17 @@ A `workflowScript` for the pair has a fixed shape. Notes from a real run (these 
 > below is retained only as the *intended-when-available* shape, not as current behaviour.)
 >
 > **Recommended driver:** orchestrate from the interactive **parent** session (this session), not a
-> workflowScript at all, when the live gate must run inside the flow: spawn `pi-researcher` (blocking),
-> parent runs the gate command, spawn `pi-condenser`, parent runs the final gate. The interactive parent
+> workflowScript at all, when the live gate must run inside the flow: spawn `pi-researcher` **as a
+> background (`async: true`) child**, parent runs the gate command, spawn `pi-condenser` **as a
+> background (`async: true`) child**, parent runs the final gate. The interactive parent
 > has a shell, so the gate runs literally — no `runs.host`, no abort. Example snippet below shows one way.
+>
+> **Why background, not blocking:** both agents must be spawned as background children
+> (`async: true`). Foreground/blocking (`async: false`) children do not load ambient extensions, so
+> the researcher's `web_search` / `fetch_content` / `source_check` tools are unavailable and the run
+> aborts at spawn (unavailable-tool) or produces a web-less raw. The agent legs therefore require
+> background mode. The gates stay in the interactive parent (which has an actual shell); agents cannot
+> execute `node`, so their self-gate is a static mirror and the parent run is the authoritative gate.
 
 ```js
 const RAW = "/workspaces/<proj>/research/research-stage-01-x.md";
