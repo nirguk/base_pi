@@ -165,6 +165,22 @@ node -e "const fs=require('fs'); const f=fs.readFileSync('data.json','utf8'); co
 - **Ordering (lean)**: run the worker's known deterministic pass/fail command (`run X → expect exit 1`) as an exec-smoke *first*, then let the static reviewer reason about an already-run artifact; re-smoke only for a genuinely novel command the reviewer declares (`gated-on-<cmd>`). Reserve a heavier two-stage reviewer (read-only stage-1 → bash-capable stage-2) for code with real runtime branching.
 - **Trivial-strand exemption**: for a handful of shell lines, a full parallel `reviewer` fanout is overkill — a single cheap static pass plus the bounded exec-smoke worker suffices; save heavy reviewers for real branching.
 
+#### `pi-research-pair` — two-agent research pipeline
+
+A reusable research pattern: `pi-researcher` gathers a **raw**, `pi-condenser` folds it into a **narrative `-x`** (human-reviewable without raw), with a **deterministic structural gate** (`check-research.mjs`). For stages where research must be reproducible and content kept out of main model context.
+
+**Invoke with:** `run the pi-research-pair for stage <N>`
+
+**The usable assets all live in this repo (base_pi):**
+
+- **Living spec** (what / why / decision-log): `.pi/research-pair/RESEARCH_PAIR.md` — maintain the pattern **there**, not here.
+- **Runbook** (run-enable + placeholders): `.pi/research-pair/README.md`
+- **Gate + scaffold**: `.pi/research-pair/bin/check-research.mjs`, `.pi/research-pair/bin/run-stage.mjs`
+- **Prompt templates**: `.pi/research-pair/prompts/researcher.md`, `condenser.md`, `example-stage-08.md`
+- **Agents** (in this dir): `.pi/agents/pi-researcher.md`, `.pi/agents/pi-condenser.md`
+
+Run the gate/scaffold from the **project root** whose `research/` dir has the stage files (scripts resolve `research/` against `process.cwd()`), e.g. `cd /workspaces/<project> && node /workspaces/base_pi/.pi/research-pair/bin/run-stage.mjs 08 --gate-only`. A project repo may carry `check-research.mjs` / `run-stage.mjs` / `prompts/` as **symlinks** onto these canonical copies so its local docs keep working.
+
 #### Prompt patterns (ready to paste)
 
 **Static reviewer** (read-only `reviewer`):
