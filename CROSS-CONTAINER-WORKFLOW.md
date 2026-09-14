@@ -54,10 +54,44 @@ a shared bind-mount and executes commands inside the project container via
 
 ## Adding another project
 
-1. Add one bind-mount entry for its host path in `base_pi/.devcontainer/devcontainer.json`
+### Project-side files (required)
+
+Each project repo needs a `.devcontainer/` directory so that VS Code
+can build and attach a container when the repo is opened.
+
+**`.devcontainer/devcontainer.json`** — minimum shape:
+```json
+{
+  "name": "<alias>",
+  "build": { "context": ".", "dockerfile": "Dockerfile" },
+  "remoteUser": "vscode",
+  "workspaceFolder": "/workspaces/<project>",
+  "runArgs": ["--name=<alias>"]
+}
+```
+
+**`.devcontainer/Dockerfile`** — minimum shape:
+```dockerfile
+FROM mcr.microsoft.com/devcontainers/base:ubuntu
+```
+Swap the base image for whatever the project needs (Node, Python, etc.).
+
+### Harness-side setup
+
+1. Add one bind-mount entry for the host path in
+   `base_pi/.devcontainer/devcontainer.json`
    (`"source=${localEnv:HOME}/workspaces/<project>,target=/workspaces/<project>,type=bind"`).
 2. `pi-projects register <project> <container-name> /workspaces/<project>`.
 3. Use `pi-run <project> <command>`; files at `/workspaces/<project>`.
+
+### Workflow
+
+After the project-side files are in place, open the repo in VS Code
+(a separate window from the harness). VS Code builds the container from
+the Dockerfile and attaches to it. Once the container is running,
+`pi-run <alias> <cmd>` executes commands inside it. The harness bind-
+mount means files written from the harness are immediately visible in
+the project container, and vice versa.
 
 Container resolution: `pi-run`/`pi-projects` call `resolveContainer(alias)`, which
 (1) uses the registry's stored container name if that container is running,
