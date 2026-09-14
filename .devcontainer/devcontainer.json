@@ -10,7 +10,8 @@
     "source=${localEnv:BASE_FOLDER}/congruent_roster,target=/workspaces/congruent_roster,type=bind",
     "source=${localEnv:BASE_FOLDER}/nirgraham_career,target=/workspaces/nirgraham_career,type=bind",
     "source=${localEnv:BASE_FOLDER}/penpalagent,target=/workspaces/penpalagent,type=bind",
-    "source=${localEnv:BASE_FOLDER}/pi-audit,target=/workspaces/pi-audit,type=bind"
+    "source=${localEnv:BASE_FOLDER}/pi-audit,target=/workspaces/pi-audit,type=bind",
+    "source=${localEnv:BASE_FOLDER}/dsh_cv,target=/workspaces/dsh_cv,type=bind"
   ],
   "runArgs": [],
   "features": {
