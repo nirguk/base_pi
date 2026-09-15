@@ -221,13 +221,22 @@ full pattern.
   `scout`/`freshworker` task you delegate to that container.
 - **To execute commands** (tests, builds, scripts) inside a project container:
   ```bash
-  pi-run <project-alias> <command...>
+  pi-run <project-alias> [--user <user>] [--env KEY=VAL ...] <command...>
   ```
   Examples:
   ```bash
   pi-run congruent_roster python3 -m pytest
   pi-run congruent_roster uv pip install -e .
   ```
+  Commands run **as root by default** (`HOME=/root`). Pass `--user`/`--env`
+  **before** the command when tooling keys off the dev user's home or needs
+  variable overrides (e.g. DSH profiles live in the dev user's `$HOME/.dsh`;
+  a root-shell `dsh web` silently boots a fresh empty profile):
+  ```bash
+  pi-run dsh_cv --user vscode bash -c 'echo $HOME'       # /home/vscode
+  pi-run dsh_cv --env DSH_HOME=/home/vscode/.dsh node …  # env passthrough
+  ```
+  Options are parsed until the first non-option token; `--` ends option parsing.
   (project containers expose `python3`, not `python`)
 - **Manage registered projects:**
   ```bash

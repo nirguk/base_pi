@@ -2,12 +2,22 @@
 # pi-run: Execute a command inside a registered project devcontainer
 #
 # Usage:
-#   pi-run <project-alias> <command...>
+#   pi-run <project-alias> [--user <user>] [--env KEY=VAL ...] <command...>
 #
 # Examples:
 #   pi-run congruent_roster python -m pytest
 #   pi-run congruent_roster pip install -e .
-#   pi-run congruent_roster python src/main.py
+#   pi-run dsh_cv --user vscode bash -c 'echo $HOME; id -un'   # run as the container's dev user
+#   pi-run dsh_cv --env DSH_HOME=/home/vscode/.dsh node ...     # set env for the command
+#
+# Options (must precede the command):
+#   --user <user>     run the command as <user> inside the container
+#                     (docker exec -u). Defaults to the container's root,
+#                     which usually means $HOME=/root — use --user vscode
+#                     for tooling that keys off the dev user's home (e.g. DSH).
+#   --env KEY=VAL     pass an environment variable through (repeatable;
+#                     docker exec -e). OS-level envs are inherited by docker
+#                     exec, so only set what must differ.
 #
 # Resolves <alias> -> (container, path) via /workspaces/base_pi/.pi/projects.json
 # (maintained by `pi-projects`), with dynamic fallback to the devcontainer image
@@ -23,7 +33,7 @@ shift
 
 if [ -z "$PROJECT_ALIAS" ]; then
   echo "Error: no project alias specified" >&2
-  echo "Usage: pi-run <project-alias> <command...>" >&2
+  echo "Usage: pi-run <project-alias> [--user <user>] [--env KEY=VAL...] <command...>" >&2
   exit 1
 fi
 
@@ -52,5 +62,29 @@ if [ "$RESOLVED_VIA" = "image" ]; then
   echo "pi-run: resolved '$PROJECT_ALIAS' -> running container '$CONTAINER_NAME' (by image, stored name stale)" >&2
 fi
 
+# Collect docker exec options passed as --flags, then treat the rest as the command.
+DOCKER_OPTIONS=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --user)
+      [ -n "${2:-}" ] || { echo "Error: --user needs a value (e.g. --user vscode)" >&2; exit 1; }
+      DOCKER_OPTIONS+=(-u "$2")
+      shift 2
+      ;;
+    --env)
+      [ -n "${2:-}" ] || { echo "Error: --env needs a value (KEY=VAL)" >&2; exit 1; }
+      DOCKER_OPTIONS+=(-e "$2")
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
 # Execute command inside target container (sudo: socket is root-only)
-exec sudo -n docker exec -w "$PROJECT_PATH" "$CONTAINER_NAME" "$@"
+exec sudo -n docker exec -w "$PROJECT_PATH" "${DOCKER_OPTIONS[@]}" "$CONTAINER_NAME" "$@"
