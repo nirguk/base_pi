@@ -1,4 +1,5 @@
 node_modules/
+.venv
 .devcontainer-lock.json
 .DS_Store
 *.log
@@ -14,6 +15,7 @@ pi-llm-debugging/
 .pi/sessions
 .pi/web-search-cache
 .pi/bin
+.pi/uv/
 .pi/auth.json
 .pi/models-store.json
 .pi/run-history.jsonl

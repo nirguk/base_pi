@@ -181,6 +181,20 @@ else
   fail "pi list: extensions do not resolve" && hint "run ./.devcontainer/setup.sh"
 fi
 
+# ---------- 10. uv present (harness Python tooling) ----------
+if command -v uv >/dev/null 2>&1 && uv --version >/dev/null 2>&1; then
+  pass "uv runtime: $(uv --version 2>/dev/null)"
+else
+  fail "uv runtime: uv not on PATH" && hint "run ./.devcontainer/setup.sh; on a rebuilt image the Dockerfile step installs it"
+fi
+
+# ---------- 11. Harness venv symlink -> /opt store ----------
+if [ -L "$WS/.venv" ] && [ -x "$(readlink -f "$WS/.venv")/bin/python" ]; then
+  pass "harness venv: .venv -> $(readlink -f "$WS/.venv")"
+else
+  fail "harness venv: .venv symlink to /opt/base-pi-venv missing" && hint "run ./.devcontainer/setup.sh"
+fi
+
 echo
 if [ "$fails" -eq 0 ]; then
   printf 'ALL CHECKS PASSED (%s)\n' "$passes"

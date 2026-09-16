@@ -181,6 +181,23 @@ fi
 echo "[setup] npm store verified populated (pinned npm packages resolve)."
 
 # ---------------------------------------------------------------------------
+# Harness Python tooling — uv + the /opt venv (harnesskit and friends)
+# ---------------------------------------------------------------------------
+# The harness's own Python dependencies (a uv-managed pyproject.toml at the
+# workspace root) live on container-native storage for the same I/O reasons
+# as the npm store: the workspace keeps a .venv symlink to /opt/base-pi-venv.
+# Guarded on uv + pyproject presence so pre-uv images degrade gracefully.
+if command -v uv >/dev/null 2>&1 && [ -f "$WS/pyproject.toml" ]; then
+  VENV_STORE=/opt/base-pi-venv
+  rm -f "$WS/.venv"   # the link only, never the store (no trailing slash)
+  if [ ! -x "$VENV_STORE/bin/python" ]; then
+    uv venv "$VENV_STORE"
+  fi
+  ln -s "$VENV_STORE" "$WS/.venv"
+  ( cd "$WS" && uv sync )
+fi
+
+# ---------------------------------------------------------------------------
 # Cross-container tooling
 # ---------------------------------------------------------------------------
 ln -sf "$WS/.pi/scripts/pi-run" /usr/local/bin/pi-run
@@ -194,7 +211,7 @@ if [ -d "/root/.pi" ]; then
     cp -r /root/.pi/* /home/vscode/.pi/ 2>/dev/null || true
 fi
 
-for DIR in "$WS" /opt/pi-npm-store /home/vscode/.pi; do
+for DIR in "$WS" /opt/pi-npm-store /opt/base-pi-venv /home/vscode/.pi; do
     if [ -d "$DIR" ]; then
         chown -R vscode:vscode "$DIR"
     fi
