@@ -6,3 +6,18 @@ requires-python = ">=3.12"
 name = "base-pi-harness"
 version = "0.1.0"
 source = { virtual = "." }
+dependencies = [
+    { name = "harnesskit" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "harnesskit", specifier = "==0.5.0" }]
+
+[[package]]
+name = "harnesskit"
+version = "0.5.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/34/eb/c8b75d3ff4c53f454ab8a213165e27c938405250140b44dbb908f3ccc093/harnesskit-0.5.0.tar.gz", hash = "sha256:163b9731a13f97e2315e3bc4ac0348fd4ebf7b9ad0f221342f5d4c0319a5b3da", size = 27274, upload-time = "2026-02-17T21:56:54.695Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c0/b5/d4f8e46a8c5d69b5805060c13db03cb8cd79fe843dcc0ffbce7fab1d1203/harnesskit-0.5.0-py3-none-any.whl", hash = "sha256:8a9996b2884d29bb2908b40d0b57acd4a07fdc1ad4d644629468b30f8ed03bfe", size = 28082, upload-time = "2026-02-17T21:56:53.26Z" },
+]

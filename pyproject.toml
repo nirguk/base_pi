@@ -5,4 +5,4 @@ name = "base-pi-harness"
 version = "0.1.0"
 description = "Shared Python tooling for the base_pi agent harness (fuzzy code edits via harnesskit)"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["harnesskit==0.5.0"]
