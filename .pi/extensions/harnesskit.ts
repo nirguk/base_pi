@@ -63,8 +63,12 @@ const fuzzyEditSchema = Type.Object({
 
 // ── Constants ─────────────────────────────────────────────────────────
 // Old_text longer than this only runs hk's cheap stages (exact, then
-// whitespace-normalised): hk's difflib stages are quadratic and were
-// measured grinding 60s+ on a ~500-char no-match.
+// whitespace-normalised): hk's difflib stages are quadratic — measured
+// grinding 60s+ on a ~500-char no-match in a mid-size file — and the
+// remaining work at ~300 chars is already right around HK_TIMEOUT_MS, so
+// above it a miss would degrade to a slow, vague timeout instead of an
+// instant, precise refusal. Large exact or whitespace-drifted blocks still
+// apply fine (stages 1-2); only content drift in big blocks is refused.
 const GATE_LEN = 300;
 const HK_TIMEOUT_MS = 20_000;
 const DEFAULT_THRESHOLD = 0.8;
@@ -210,8 +214,9 @@ export default function (pi: ExtensionAPI) {
             "`edit` when you hold the exact bytes. Edits apply atomically (all or nothing), write " +
             "an undo-able backup, and report match type + confidence + the matched text so you can " +
             "verify what changed (--dry_run preview available). old_text guidance: keep it exact, " +
-            "unique and compact (under ~300 chars) — a large block that matches nowhere is refused " +
-            "fast with a re-read instruction rather than exhaustively searched.",
+            "unique and compact; beyond ~300 chars only whitespace drift is healed — content drift " +
+            "in a large block is refused fast with a re-read instruction (re-read and resubmit " +
+            "exact text) rather than exhaustively searched.",
         parameters: fuzzyEditSchema,
         async execute(_toolCallId, params, signal, _onUpdate, ctx) {
             const filePath = resolve(ctx?.cwd ?? process.cwd(), params.file);

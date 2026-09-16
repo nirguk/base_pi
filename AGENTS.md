@@ -107,6 +107,14 @@ For any directory, use `findtree` once to see the full structure in a single rea
 
 Use `edit` for targeted text replacement. Multiple disjoint changes in one file go in **one call** as an `edits[]` array — do not make N sequential calls. Each `oldText` must be unique and non-overlapping in the file; if two changes touch the same block or nearby lines, merge them into one edit. Keep `oldText` as small as possible while still unique — don't pad with large unchanged regions.
 
+#### `fuzzy_edit` — edits with whitespace tolerance (harnesskit)
+
+`fuzzy_edit {file, edits:[{old_text, new_text}], threshold?, dry_run?}` applies edits with fuzzy matching, backed by harnesskit in the harness's own uv-managed venv (`/opt/base-pi-venv`, `pyproject.toml` at this repo's root). It is the tool of choice when the targeted text may differ from the file **in whitespace/indentation** — `edit` is byte-exact and fails on such drift, `fuzzy_edit` heals it (up to ~300 chars it will also heal small content drift).
+
+- Edits are **atomic** (all or nothing), report match type + confidence + matched text per edit, and write an undo backup under `.hk/` (gitignored runtime artifact). `dry_run: true` previews without touching the file.
+- `old_text` guidance: keep it exact, unique, compact. **Beyond ~300 chars only whitespace drift is healed** — a large block that matches nowhere is refused fast with a re-read instruction, deliberately: harnesskit's fuzzy stages are quadratic (a ~500-char miss measures 60s+), and a large content-drifted block is a wrong-block signal, not drift — re-read and resubmit exact text.
+- If `fuzzy_edit` misbehaves or is absent, run `uv sync` in this repo root (the venv lives on container-native storage at `/opt/base-pi-venv`, symlinked from `.venv`).
+
 #### `patch` — apply unified diffs (when you have a diff or want reversibility)
 
 `patch` applies a unified diff file to a target file. It is reversible (`patch -R`), composable, and never silently overwrites content — it applies changes line-by-line and reports conflicts.
