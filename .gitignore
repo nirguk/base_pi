@@ -30,3 +30,4 @@ pi-llm-debugging/
 # llm debug payloads (runtime, never commit)
 pi_perf/llm-debug.sqlite
 *.sqlite
+.hk/
