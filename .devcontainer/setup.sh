@@ -189,6 +189,10 @@ echo "[setup] npm store verified populated (pinned npm packages resolve)."
 # Guarded on uv + pyproject presence so pre-uv images degrade gracefully.
 if command -v uv >/dev/null 2>&1 && [ -f "$WS/pyproject.toml" ]; then
   VENV_STORE=/opt/base-pi-venv
+  # uv-provisioned interpreters must land on shared storage, never in the
+  # provisioning user's home: a venv whose bin/python symlinks into /root is
+  # unexecutable by the vscode user (healthcheck check 11, the 10 Sep bug).
+  export UV_PYTHON_INSTALL_DIR=/opt/uv-python
   rm -f "$WS/.venv"   # the link only, never the store (no trailing slash)
   if [ ! -x "$VENV_STORE/bin/python" ]; then
     uv venv "$VENV_STORE"
@@ -211,7 +215,7 @@ if [ -d "/root/.pi" ]; then
     cp -r /root/.pi/* /home/vscode/.pi/ 2>/dev/null || true
 fi
 
-for DIR in "$WS" /opt/pi-npm-store /opt/base-pi-venv /home/vscode/.pi; do
+for DIR in "$WS" /opt/pi-npm-store /opt/base-pi-venv /opt/uv-python /home/vscode/.pi; do
     if [ -d "$DIR" ]; then
         chown -R vscode:vscode "$DIR"
     fi
