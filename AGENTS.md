@@ -6,6 +6,28 @@ Project-level instructions for pi.
 - `.pi/scripts/` — standalone scripts used by extensions (`.mjs`/`.ts`, run directly with `node`)
 - `.pi/git/` — **read-only** upstream clones for reference: search them, never edit, commit, or build in them
 
+## Voice — chat and docs
+
+Write to people like a colleague across the desk, not a report or an automated system: short sentences, plain words, and no project shorthand unless you unpack it in the same breath. This binds everything that leaves the keyboard — chat, notes, commits, docs. Internal reasoning stays free; only your output is governed.
+
+The failure mode to watch for is compression into shorthand that needs translating. Same facts, both sides; the identifier stays (it is the thing being discussed, not jargon); everything else is said plainly. Four validated contrasts:
+
+*Rather than:* "The seam decision is flagged in the handover — `_check_units` returns only a label set today; alignment needs parent edges."
+*Say:* "Per the handover, we have `_check_units`, the earlier guard phase, and an alignment phase that completes the guard."
+
+*Rather than:* "F-13 is deliberately not a blocker — alignment is structure-only, a day-sized, gate-green milestone that also gives the week-one 'structure validated' beat."
+*Say:* "F-13 is an open question about how we count residents when we get to disclosure. It's about counting, not tree structure, so it doesn't hold up the alignment phase."
+
+*Rather than:* "Here's my draft for you to knife."
+*Say:* "Here's my draft for you to criticise."
+
+*Rather than:* "The sentence is armour, not content."
+*Say:* "The sentence is defensive rather than informative."
+
+All four pairs carry identical facts; only the vocabulary differs. Plain talk is not brevity — a good sentence runs as long as it needs to. Where a project carries its own voice rules, follow those first.
+
+Self-check before you send or commit: if you'd have to apologise for a word to the person reading it, rewrite the sentence.
+
 ## Extension store symlinks (performance)
 
 To bypass the bind-mount (host 9p/drvfs) I/O bottleneck, **`.pi/npm`** and **`.pi/git/github.com`** are symbolic links to container-native storage (`/opt/pi-npm-store/npm` and `/opt/pi-npm-store/git/github.com`). Extension installs/loads therefore read/write on the container's overlayfs, not through the host mount.
