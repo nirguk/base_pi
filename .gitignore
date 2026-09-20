@@ -31,3 +31,4 @@ pi-llm-debugging/
 pi_perf/llm-debug.sqlite
 *.sqlite
 .hk/
+.pi/google-chrome-for-testing/Crash Reports/settings.dat
