@@ -178,6 +178,7 @@ node -e "const fs=require('fs'); const f=fs.readFileSync('data.json','utf8'); co
 
 - **Never count things by eye** — don't try to compute character, line, token, or occurrence counts from file contents in your context; such estimates are unreliable. Measure indirectly with a tool or command instead — `wc -m` (chars), `wc -c` (bytes), `wc -l` (lines), `rg -c 'pat'` (lines containing a match), `rg -o 'pat' | wc -l` (total matches.
 - **Use `read` over `cat`/`sed`** — handles truncation gracefully and supports offset/limit for large files.
+- **Never gate a commit on piped output** — `ruff check ... | tail -1` exits clean whatever ruff says, so lint failures sail into the commit. Run gates unpiped and check the exit code (`... && git commit`), or `set -o pipefail` first. Logged 20 Sep 2026 after a treatments commit landed with five E501s.
 - **Check `~/.pi/agent/AGENTS.md`** for global tips that apply across all projects.
 
 ### Subagents & orchestration — quick rules
