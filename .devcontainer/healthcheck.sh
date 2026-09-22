@@ -144,6 +144,21 @@ if command -v node >/dev/null 2>&1; then
         ;;
       git:*)
         rest=${spec#git:}
+        if [[ "$rest" != *@* ]]; then
+          dir="$STORE/git/$rest"
+          got=$(git -C "$dir" rev-parse HEAD 2>/dev/null)
+          if [ -z "$got" ]; then
+            fail "git floating $rest: checkout missing under store" && hint "run pi update $spec"
+            continue
+          fi
+          want=$(git -C "$dir" rev-parse origin/HEAD 2>/dev/null || git -C "$dir" rev-parse origin/master 2>/dev/null)
+          if [ -n "$want" ] && [ "$want" = "$got" ]; then
+            pass "git floating $rest (HEAD=$got)"
+          else
+            fail "git floating $rest: HEAD=$got != origin ${want:-unknown}" && hint "run pi update $spec"
+          fi
+          continue
+        fi
         ref=${rest##*@}
         repopath=${rest%@*}   # host/owner/repo, e.g. github.com/nirguk/pi-session-analyzer
         dir="$STORE/git/$repopath"

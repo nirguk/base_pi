@@ -59,7 +59,7 @@
       "extensions": []
     },
     "git:github.com/nirguk/pi-diffy@v0.2.0",
-    "git:github.com/nirguk/pi-audit@1eb69e64db3fc6b71d5d03fcafc0a9227a94ab96"
+    "git:github.com/nirguk/pi-audit"
   ],
   "skills": [
     "s",
