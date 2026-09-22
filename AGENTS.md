@@ -242,6 +242,8 @@ full pattern.
 
 **Prereq:** the target project's container must be running (opened in VS Code).
 
+- **When asked to attend to a named project, announce the session.** Say which project you are joining, then run a light-touch check via `container_exec` (e.g. `pwd`) so the session name shows and the user sees the link is live.
+
 - **Step 1 — read the target repo's root `README.md` BEFORE operating on it.**
   It is the ground truth for that project's toolchain and conventions (is it
   uv-managed, a Node/npm project, a plain venv, a Go/Cargo workspace …?) and
@@ -250,7 +252,12 @@ full pattern.
   `pi-run <alias> uv run …`, not by poking its `.venv` directly. When the harness
   needs runtime facts about the container, fold this read into the
   `scout`/`freshworker` task you delegate to that container.
-- **To execute commands** (tests, builds, scripts) inside a project container:
+- **To execute commands** (tests, builds, scripts) inside a project container,
+  use the `container_exec` tool (`.pi/extensions/container_exec.ts`). It shares
+  its resolver with `pi-run`, so the two cannot drift apart. It names the
+  session after the alias on first use, so cross-container work is easy to
+  find in `/resume`. Fall back to `pi-run` in bash only outside a session
+  (terminal, script, cron) or when the tool is unavailable:
   ```bash
   pi-run <project-alias> [--user <user>] [--env KEY=VAL ...] <command...>
   ```

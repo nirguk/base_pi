@@ -30,5 +30,6 @@ pi-llm-debugging/
 # llm debug payloads (runtime, never commit)
 pi_perf/llm-debug.sqlite
 *.sqlite
+.agent_audit.db
 .hk/
 .pi/google-chrome-for-testing/Crash Reports/settings.dat
