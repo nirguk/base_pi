@@ -57,7 +57,7 @@ fi
 echo "[setup] APT PACKAGES INSTALL COMPLETE"
 
 echo "[setup] Installing Pi.dev agent (pinned for reproducible rebuilds)..."
-npm install -g --allow-scripts=@google/genai,protobufjs,koffi @earendil-works/pi-coding-agent@0.85.1
+npm install -g --allow-scripts=@google/genai,protobufjs,koffi @earendil-works/pi-coding-agent@0.87.0
 
 echo "[setup] Trusting project..."
 mkdir -p ~/.pi/agent
