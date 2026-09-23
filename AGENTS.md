@@ -60,19 +60,21 @@ There is no package.json or test suite here. When you change a script, verify it
 
 #### `findtree` — directory exploration
 
-`findtree` is a pi **extension** (`.pi/extensions/findtree.ts`) that registers a **tool** the LLM can call and a **slash command** (`/findtree`) the user can invoke. It pipes `find` through `tree --fromfile`, collapsing repeated parent-directory prefixes into a compact ASCII hierarchy — fewer tokens, structure visible at a glance. This is the tool to use for any directory exploration task.
+`findtree` is a pi **extension** (`.pi/extensions/findtree.ts`) that registers a **tool** the LLM can call and a **slash command** (`/findtree`) the user can invoke. It pipes `fd` through `tree --fromfile`, collapsing repeated parent-directory prefixes into a compact ASCII hierarchy — fewer tokens, structure visible at a glance. This is the tool to use for any directory exploration task. `fd` is provisioned by pi itself (`.pi/bin/fd`); it walks in parallel and respects `.gitignore`, so it stays fast on trees with heavy `node_modules` folders.
 
-**LLM tool call** — the agent calls the `findtree` tool with `path` and `expressions` parameters, plus optional `from` (skip first N find result paths) and `lines` (paths per page, default 100, max 500). Paging is applied at the input level via `tail | head` so `tree` only processes the current page's paths.
+**LLM tool call** — the agent calls the `findtree` tool with `path` and `args` (native `fd` arguments) parameters, plus optional `from` (skip first N result paths) and `lines` (paths per page, default 100, max 500). Paging is applied at the input level via `tail | head` so `tree` only processes the current page's paths. Hidden files are included; gitignored files are skipped unless `--no-ignore` is passed.
 
 **Slash command** — the user types:
 ```
-/findtree . -type f -name "*.ts" -not -path "*/node_modules/*"
-/findtree . -type f -name "*.ts" --from 100 --lines 100
+/findtree . --type f --glob "*.ts" --exclude node_modules
+/findtree . --type f --glob "*.ts" --from 100 --lines 100
 ```
+
+**Common `fd` flags** (what goes in `args`): `--type f` (files) / `--type d` (dirs), `--glob "*.ts"` (glob match), `--exclude node_modules` (skip a dir, repeatable), `-d 3` (max depth), `--no-ignore` (include gitignored files), `--hidden` is already on.
 
 **Example** — find all `.ts` files across the project (slash command):
 ```
-/findtree . -type f -name "*.ts" -not -path "*/node_modules/*"
+/findtree . --type f --glob "*.ts" --exclude node_modules
 ```
 Output (collapsed tree, not repeated full paths):
 ```
@@ -105,23 +107,11 @@ fd --type f --glob "*.ts" . | wc -l
 fd --type f --glob "*.log" . -X rm
 ```
 
-If `fd` is not installed, use `findtree` instead.
+If `fd` is not installed, install it (pi provisions `.pi/bin/fd` automatically; otherwise `apt install fd-find` / `brew install fd`) — `findtree` needs it as its search engine.
 
 #### Directory inspection — use `findtree`
 
 For any directory, use `findtree` once to see the full structure in a single read. For a single directory, `ls` is fine.
-
-### Content Search (use `rg`, never `grep -r` by default)
-
-- **`rg` is the default for all content searches.** It is faster on large trees and automatically skips `.gitignore`-d directories.
-- **Never use `bash grep -r`** for content searches when `rg` is available. If you catch yourself about to, stop and use `rg` instead.
-- **If `grep -r` is unavoidable** (e.g., `rg` missing), scope it narrowly so it doesn't recurse into `.pi/` or `node_modules` and time out — e.g. `grep -rn "TODO" src/ --exclude-dir=node_modules`.
-
-| Goal | Wrong | Right |
-|------|-------|-------|
-| Search file contents | `grep -r "or-metrics" .` | `rg "or-metrics"` |
-| Search specific ext | `grep -r "TODO" --include="*.ts"` | `rg -t ts "TODO"` (also `-g '*.ts'`) |
-| Invert match | `grep -rv "debug" .` | `rg -v "debug"` |
 
 ### File Editing
 
