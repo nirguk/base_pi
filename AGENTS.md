@@ -297,6 +297,20 @@ full pattern.
 - **To read or write project files** directly (no container execution needed):
   access the bind-mounted path, e.g. `/workspaces/congruent_roster`. Writes sync
   to the project container instantly.
+- **Keep project worktrees inside the bind mount.** A worktree created beside
+  the checkout (e.g. `/workspaces/<repo>-suffix`) lives on container-only
+  storage: agents can use it, but the host (Windows/macOS) never sees its
+  files, so built pages and reports look missing from the user's side. Create
+  worktrees under the mirrored tree instead, e.g.
+  `/workspaces/<repo>/.worktrees/<name>`, and keep the parent clean with a
+  local `.git/info/exclude` entry for `.worktrees/` (no repo commit needed).
+  `git worktree move` cannot cross the mount boundary (invalid cross-device
+  link) — if a worktree already sits outside, re-register it: fresh
+  `git worktree add` at the inside path, copy back everything except `.git`,
+  point `.venv` at the container-native store (symlink, never a real dir on
+  the mount), and `rm -rf` the old tree. Bulk copies across the boundary are
+  slow (9p): copy only what cannot be rebuilt (`shared_in/`, fixtures),
+  regenerate the rest, and never `cp -a` a real `.venv` directory.
 - **Extensions** can discover registered projects natively from Node:
   ```js
   const { what_projects } = require('/workspaces/base_pi/.pi/scripts/pi-projects.js');
