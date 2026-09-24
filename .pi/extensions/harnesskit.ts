@@ -23,13 +23,18 @@
  *    (HK_TIMEOUT_MS) so even an unexpected pathological input degrades to
  *    a clear "timed out" rather than a hung turn.
  *
- * Usage (LLM): fuzzy_edit {file, edits:[{old_text, new_text}], ...}
+ * Usage (LLM): fuzzy_edit {file, edits:[{oldText, newText}], ...} — same
+ * parameter shape as the built-in `edit` tool (snake_case old_text/new_text
+ * still accepted). Exact matches apply in-process with no subprocess; only
+ * misses fall through to hk. The pre-call file bytes are retained and
+ * restored on any abnormal end (timeout/kill), because hk's --atomic only
+ * covers failures hk itself survives.
  *
- * @version 0.1.0
+ * @version 0.2.0
  */
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
@@ -41,12 +46,15 @@ const fuzzyEditSchema = Type.Object({
     }),
     edits: Type.Array(
         Type.Object({
-            old_text: Type.String({
+            old_text: Type.Optional(Type.String({
                 description:
                     "Text to find in the file. Keep it exact, unique and compact (under ~300 chars); " +
-                    "whitespace/indentation may drift from the file, the content must be right.",
-            }),
-            new_text: Type.String({ description: "Replacement for the matched text." }),
+                    "whitespace/indentation may drift from the file, the content must be right. " +
+                    "Snake_case spelling; oldText (edit-compatible camelCase) is also accepted.",
+            })),
+            new_text: Type.Optional(Type.String({ description: "Replacement for the matched text. newText also accepted." })),
+            oldText: Type.Optional(Type.String({ description: "Alias for old_text — same spelling as the built-in edit tool." })),
+            newText: Type.Optional(Type.String({ description: "Alias for new_text." })),
         }),
         { minItems: 1, description: "One or more replacements; applied atomically (all or nothing)." },
     ),
@@ -207,23 +215,32 @@ export default function (pi: ExtensionAPI) {
         name: "fuzzy_edit",
         label: "fuzzy_edit",
         description:
-            "Edit a code file with fuzzy matching tolerance: old_text is located even when its " +
-            "whitespace or indentation drifts from the file's actual bytes (harnesskit's 4-stage " +
-            "cascade: exact, whitespace-normalised, difflib, line-level). Prefer fuzzy_edit over " +
-            "the `edit` tool when the targeted text may differ in whitespace from the file; prefer " +
-            "`edit` when you hold the exact bytes. Edits apply atomically (all or nothing), write " +
-            "an undo-able backup, and report match type + confidence + the matched text so you can " +
-            "verify what changed (--dry_run preview available). old_text guidance: keep it exact, " +
+            "Edit a code file: exact text replacement first, fuzzy matching fallback. " +
+            "Same parameter shape as the built-in `edit` tool ({file, edits:[{oldText, newText}]}; " +
+            "snake_case old_text/new_text also accepted), so this tool supersedes `edit` for edits " +
+            "under ~300 chars per block. Each oldText is tried exactly first (in-process, no subprocess); " +
+            "only misses fall through to harnesskit's tolerant stages (whitespace-normalised, difflib, " +
+            "line-level), which locate oldText even when its whitespace or indentation drifted. " +
+            "Edits apply atomically (all or nothing) — the pre-call file bytes are restored on any " +
+            "abnormal end including timeout — and report match type + confidence + the matched text " +
+            "so you can verify what changed (--dry_run preview available). Keep oldText exact, " +
             "unique and compact; beyond ~300 chars only whitespace drift is healed — content drift " +
-            "in a large block is refused fast with a re-read instruction (re-read and resubmit " +
-            "exact text) rather than exhaustively searched.",
+            "in a large block is refused fast with a re-read instruction rather than exhaustively searched.",
         parameters: fuzzyEditSchema,
         async execute(_toolCallId, params, signal, _onUpdate, ctx) {
             const filePath = resolve(ctx?.cwd ?? process.cwd(), params.file);
-            const edits = params.edits;
             const threshold = params.threshold ?? DEFAULT_THRESHOLD;
             const dryRun = params.dry_run ?? false;
             const fail = (text: string) => ({ content: [{ type: "text" as const, text }], details: {} });
+            // Accept both spellings so calls written for `edit` work unchanged.
+            const edits = params.edits.map((e) => ({
+                old_text: e.oldText ?? e.old_text ?? "",
+                new_text: e.newText ?? e.new_text ?? "",
+            }));
+            const missing = edits.findIndex((e) => !e.old_text || !e.new_text);
+            if (missing !== -1) {
+                return fail(`edit ${missing + 1}: supply old_text/new_text (or the edit-style oldText/newText).`);
+            }
 
             const hk = hkBinary();
             if (!existsSync(hk)) {
@@ -239,6 +256,31 @@ export default function (pi: ExtensionAPI) {
                 content = readFileSync(filePath, "utf8");
             } catch (e) {
                 return fail(`cannot read ${filePath}: ${(e as Error).message}`);
+            }
+
+            // Exact-first fast path: every block present exactly once needs no
+            // subprocess — apply in-process with a single write (atomic by
+            // construction). Anything else (miss or repeated block) goes to hk.
+            const exactOnce = edits.every((e) =>
+                content.includes(e.old_text) &&
+                content.indexOf(e.old_text) === content.lastIndexOf(e.old_text));
+            if (exactOnce) {
+                const applied = edits.map((e) => ({
+                    status: "applied",
+                    match_type: "exact",
+                    confidence: 1,
+                    matched_text: e.old_text,
+                }));
+                if (!dryRun) {
+                    let updated = content;
+                    for (const e of edits) updated = updated.replace(e.old_text, e.new_text);
+                    try {
+                        writeFileSync(filePath, updated, "utf8");
+                    } catch (e) {
+                        return fail(`fuzzy_edit exact path could not write ${filePath}: ${(e as Error).message}`);
+                    }
+                }
+                return summarise(applied, filePath, dryRun, edits.length);
             }
 
             // Large-block fail-fast gate.
@@ -271,26 +313,51 @@ export default function (pi: ExtensionAPI) {
             const args = ["apply", "--stdin", "--format", "json", "--atomic", "--threshold", String(threshold)];
             if (dryRun) args.push("--dry-run");
 
+            // Bytes held for restore: hk's --atomic only rolls back failures hk itself
+            // survives, so an externally-killed (timeout) process can leave partial
+            // writes behind. On any abnormal end we write the original bytes back first.
+            const original = content;
+            const restore = (): boolean => {
+                if (dryRun) return false;
+                try {
+                    writeFileSync(filePath, original, "utf8");
+                    return true;
+                } catch {
+                    return false;
+                }
+            };
+
             const run = await runHk(args, JSON.stringify(payload), signal);
             if (run.error === "timeout") {
+                const restored = restore();
                 return fail(
-                    `fuzzy_edit timed out after ${HK_TIMEOUT_MS / 1000}s seeking a match — typically a ` +
-                    `large old_text that matches nowhere. Re-read ${params.file} and resubmit with a ` +
-                    `smaller, exact block.`,
+                    `fuzzy_edit timed out after ${HK_TIMEOUT_MS / 1000}s. ` +
+                    (restored
+                        ? `${params.file} was restored to its pre-call bytes (nothing applied). `
+                        : `WARNING: could not restore ${params.file} — verify its contents. `) +
+                    `Re-read ${params.file} and resubmit with smaller blocks.`,
                 );
             }
             if (run.error === "enoent") {
                 return fail(`fuzzy_edit unavailable: harnesskit binary missing (${hk}). Run \`uv sync\` in the base_pi harness.`);
             }
             if (run.error === "other" || !run.out.trim()) {
-                return fail(`fuzzy_edit failed unexpectedly (rc ${run.code}): ${run.out.slice(0, 400)}`);
+                const restored = restore();
+                return fail(
+                    `fuzzy_edit failed unexpectedly (rc ${run.code}): ${run.out.slice(0, 400)}` +
+                    (restored ? ` File restored to pre-call bytes.` : ``),
+                );
             }
 
             let parsed: unknown;
             try {
                 parsed = JSON.parse(run.out);
             } catch {
-                return fail(`fuzzy_edit: unexpected output from harnesskit:\n${run.out.slice(0, 400)}`);
+                const restored = restore();
+                return fail(
+                    `fuzzy_edit: unexpected output from harnesskit:\n${run.out.slice(0, 400)}` +
+                    (restored ? ` File restored to pre-call bytes.` : ``),
+                );
             }
 
             // Atomic rollback shape: {"status":"rolled_back","failed_edit_index":...,"failed_edit":...}
