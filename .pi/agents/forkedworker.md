@@ -6,8 +6,8 @@ thinking: high
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
-tools: read, grep, find, ls, bash, fuzzy_edit, write, contact_supervisor
-subagentOnlyExtensions: ../extensions/harnesskit.ts
+tools: read, grep, find, ls, bash, fuzzy_edit, write, container_exec, contact_supervisor
+subagentOnlyExtensions: ../extensions/harnesskit.ts, ../extensions/container_exec.ts
 defaultContext: fork
 defaultReads: context.md, plan.md
 defaultProgress: true
