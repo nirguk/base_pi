@@ -4,7 +4,12 @@
  * Preferred over `pi-run` in bash for agent use: structured args (no shell
  * quoting bugs), clear errors, and automatic session naming.
  *
- * Usage (LLM): container_exec { alias: "congruent_roster", command: ["python3", "-m", "pytest"] }
+ * Usage (LLM): container_exec { alias: "congruent_roster", user: "vscode", command: ["python3", "-m", "pytest"] }
+ *
+ * `user` is REQUIRED (no default). You must say whether to run as 'vscode' or
+ * 'root': files written as container root land root-owned on the project's host
+ * mount, locking the dev user out of them. Prefer 'vscode'; use 'root' only for
+ * genuine elevated-access tasks.
  *
  * Naming: sets the session display name to the alias (same as `/name <alias>`)
  * when it differs, so cross-container work is easy to find in `/resume`.
@@ -23,7 +28,7 @@ const containerExecSchema = Type.Object({
 	command: Type.Array(Type.String(), {
 		description: "Command + args to run inside the container, e.g. ['python3','-m','pytest']",
 	}),
-	user: Type.Optional(Type.String({ description: "User to run as inside the container (docker exec -u). Defaults to container root." })),
+	user: Type.String({ description: "REQUIRED. User to run as inside the container (docker exec -u), e.g. 'vscode' or 'root'. Deliberate, not optional: files written as container root land root-owned on the host mount, locking the dev user (vscode) out of them. Pass 'vscode' unless root is genuinely required." }),
 	env: Type.Optional(
 		Type.Array(Type.String(), { description: "Env vars as KEY=VAL entries (docker exec -e). Repeatable." }),
 	),
@@ -61,6 +66,19 @@ export default function (pi: ExtensionAPI) {
 			if (!command || command.length === 0) {
 				return { content: [{ type: "text" as const, text: "Missing command." }], details: {}, isError: true };
 			}
+			if (!user?.trim()) {
+				return {
+					content: [{
+						type: "text" as const,
+						text: "Missing required 'user'. container_exec now refuses to run without an explicit OS user. " +
+							"This choice is deliberately required: files written as container root land root-owned on the project's host mount, " +
+							"locking the dev user (vscode) out of them. Pass user: 'vscode' for anything that writes to the working tree; " +
+							"pass user: 'root' only when elevated access is genuinely required.",
+					}],
+					details: { alias, error: "missing user" },
+					isError: true,
+				};
+			}
 
 			// Auto-name the session after the container. Cheap: header update only.
 			try {
@@ -88,11 +106,12 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
+			const runUser = user.trim();
 			const cwd = workdir?.trim() || resolved.path;
 			const timeoutMs = Math.min(Math.max((timeout ?? DEFAULT_TIMEOUT_S) * 1000, 1000), MAX_TIMEOUT_S * 1000);
 
 			const args = ["-n", "docker", "exec", "-w", cwd];
-			if (user?.trim()) args.push("-u", user.trim());
+			args.push("-u", runUser);
 			for (const e of env ?? []) {
 				if (!e.includes("=")) {
 					return {
@@ -156,24 +175,25 @@ export default function (pi: ExtensionAPI) {
 						const hint = /not running/i.test(errOut) || /no such container/i.test(errOut)
 							? ` Container '${resolved.name}' (alias '${alias}') may be stopped — open the project in VS Code first.`
 							: "";
+						const echo = `[${resolved.name}] as ${runUser}: ${command.join(" ")}`;
 						const text = [
-							`container_exec failed (exit ${exitCode}) in '${alias}' [${resolved.name}]${hint}`,
-							`$ ${command.join(" ")}`,
+							`container_exec failed (exit ${exitCode}) in '${alias}' ${echo}${hint}`,
 							out ? `\n--- stdout ---\n${out}` : "",
 							errOut ? `\n--- stderr ---\n${errOut}` : "",
 						].join("\n").trim();
 						resolve({
 							content: [{ type: "text" as const, text }],
-							details: { alias, container: resolved.name, exitCode },
+							details: { alias, container: resolved.name, user: runUser, exitCode },
 							isError: true,
 						});
 						return;
 					}
 
-					const text = out || "(no output)";
+					const echo = `[${resolved.name}] as ${runUser}: ${command.join(" ")}`;
+					const text = out ? `(${echo})\n${out}` : `(${echo})\n(no output)`;
 					resolve({
 						content: [{ type: "text" as const, text }],
-						details: { alias, container: resolved.name, exitCode },
+						details: { alias, container: resolved.name, user: runUser, exitCode },
 					});
 				});
 			});

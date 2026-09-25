@@ -263,6 +263,12 @@ full pattern.
   ```
   Options are parsed until the first non-option token; `--` ends option parsing.
   (project containers expose `python3`, not `python`)
+
+  **`container_exec` requires an explicit `user` — there is no default.**
+  Pass `user: "vscode"` (or `pi-run --user vscode`) for anything that writes
+  to the project working tree, because files written as container root land
+  root-owned on the host mount and lock the dev user out of them. Use
+  `user: "root"` only when elevated access is genuinely required.
 - **Manage registered projects:**
   ```bash
   pi-projects list                 # alias / container / path / running status
