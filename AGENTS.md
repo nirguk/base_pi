@@ -171,6 +171,7 @@ node -e "const fs=require('fs'); const f=fs.readFileSync('data.json','utf8'); co
 ### Subagents & orchestration — quick rules
 
 - **Match the prompt to agent tools.** `reviewer` is read-only (it has no shell, so it can't run anything). `scout`/`freshworker` have a shell and are the ones that execute. When a read-only reviewer needs a runtime fact, have it list the exact command a shell-capable agent should run and gate its verdict on that check.
+- **Background by default.** Launch subagents with `async: true` unless the next step genuinely needs the result first. The owner prefers background: the session stays open for questions and steering while a child runs, and the child reports back when it finishes or needs attention. Foreground (`async: false`) is the exception for tight chains like builder-then-reviewer on one ticket.
 - **Builders self-test as a gate.** A `freshworker` task is done when it has executed the tool and pasted stdout + exit codes for the edge cases in the task. If it hasn't run anything, treat the deliverable as not yet submitted.
 - **Two-tier verification.** Executable artifacts get a *static* read-only review (structure, resolve, exit contract) and an *exec smoke* on a shell-capable agent — two separate checks, both bounded.
 - **Bound reviewers.** Give a static reviewer a specific file list and a token/turn budget, so it does not wander into vendor internals, source maps, or lockfiles. If a behavior needs running, route that to a separate smoke runner.
