@@ -1,0 +1,12 @@
+{
+  "projects": {
+    "/workspaces/PlantWise": {
+      "alias": "plantwise",
+      "label": "PlantWise",
+      "exts": [".cs"],
+      "containerPath": "/workspaces/PlantWise",
+      "mapCommand": ["dotnet", "run", "--project", "tools/MethodMap", "--", "PlantWise"],
+      "mapTimeoutMs": 120000
+    }
+  }
+}
