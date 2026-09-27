@@ -33,7 +33,7 @@
     "OPENROUTER_API_KEY": "${localEnv:OPENROUTER_API_KEY}",
     "INCEPTION_API_KEY": "${localEnv:INCEPTION_API_KEY}",
     "GH_TOKEN" : "${localEnv:GITHUB_PAT_TOKEN}",
-    "GH_USER" : "${localEnv:GITHUB_USERNAME}",
+    "GITHUB_USERNAME" : "${localEnv:GITHUB_USERNAME}",
     "PI_LLM_DEBUGGING_FOOTER" : "0",
     "XDG_CONFIG_HOME": "/workspaces/base_pi/.pi",
     "NOVITA_API_KEY": "${localEnv:NOVITA}",
