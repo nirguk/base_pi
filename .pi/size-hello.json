@@ -7,6 +7,12 @@
       "containerPath": "/workspaces/PlantWise",
       "mapCommand": ["dotnet", "run", "--project", "tools/MethodMap", "--", "PlantWise"],
       "mapTimeoutMs": 120000
+    },
+    "/workspaces/image_forge": {
+      "alias": "image_forge",
+      "label": "image_forge",
+      "exts": [".py"],
+      "containerPath": "/workspaces/image_forge"
     }
   }
 }

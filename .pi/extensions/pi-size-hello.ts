@@ -27,6 +27,10 @@
  *   whose stdout must contain a "TOTAL ..." line), mapTimeoutMs.
  * - Only an exact README.md read fires the hook (case-insensitive pair:
  *   README.md / readme.md). Deeper doc reads stay quiet.
+ * - A top-level README read with no config entry announces itself once
+ *   ("could have fired but ...") instead of running the count. It never
+ *   scans files; it just names the missing root so the next join can be
+ *   registered.
  * - Repeat reads within 30 seconds stay quiet; anything older reports again.
  * - Build folders are never counted: obj, bin, node_modules, .git, publish.
  * - Tokens are a rough chars-divided-by-four estimate, not a tokenizer count.
@@ -44,7 +48,7 @@
  * counted endings, and (optionally) a map command that prints a TOTAL line.
  * No code change needed here.
  *
- * @version 1.1.0
+ * @version 1.2.0
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
@@ -181,6 +185,13 @@ function projectFor(readPath: string, projects: Record<string, ProjectConfig>): 
 	return null;
 }
 
+// A top-level project README with no config entry: /workspaces/<name>/README.md.
+// Deeper reads (rounds/README.md, docs/...) stay quiet.
+function unregisteredRoot(readPath: string): string | null {
+	const m = readPath.match(/^(\/workspaces\/[^\/]+)\/README\.md$/i);
+	return m ? m[1] : null;
+}
+
 export default function (pi: ExtensionAPI) {
 	// The hello hook: watch finished `read` calls, and only exact README
 	// reads under a configured root. Everything else falls through untouched.
@@ -191,7 +202,26 @@ export default function (pi: ExtensionAPI) {
 			if (!readPath) return;
 			const { projects } = await loadConfig();
 			const match = projectFor(readPath, projects);
-			if (!match) return;
+			if (!match) {
+				// Unregistered folder: say so, without counting anything.
+				const candidate = unregisteredRoot(readPath);
+				if (!candidate) return;
+				const key = `unregistered:${candidate}`;
+				const now = Date.now();
+				if (now - (greeted.get(key) ?? 0) < DEDUPE_MS) return;
+				greeted.set(key, now);
+				const text =
+					`pi-size-hello could have fired for ${candidate} ` +
+					`but it has no entry in .pi/size-hello.json. ` +
+					`Add one to get size reports here.`;
+				try {
+					await ctx?.ui?.notify?.(text, "info");
+				} catch {
+					// Best effort only.
+				}
+				const content = Array.isArray(event.content) ? event.content : [];
+				return { content: [...content, { type: "text", text }] };
+			}
 			const [root, cfg] = match;
 			const key = `${root}`;
 			const now = Date.now();
