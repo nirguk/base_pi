@@ -1,19 +1,15 @@
 #!/usr/bin/env bash
 set -e
 
-# Self-elevate to root when invoked as non-root. postCreateCommand runs as
-# remoteUser (vscode once the harness runs as UID 1000); apt, npm install -g,
-# chown and the extension-store population all need root. Dockerfile/RUN and
-# already-root invocations hit `id -u == 0` and pass straight through.
+# Self-elevate to root when invoked as non-root
 if [ "$(id -u)" != "0" ]; then
   echo "[setup] not root; re-executing as root via sudo"
   exec sudo -n /workspaces/base_pi/.devcontainer/setup.sh "$@"
 fi
 
-exec > >(tee /workspaces/base_pi/setup_debug.log) 2>&1
-export COLUMNS=120
-export LINES=40
-clear
+# Log output directly without background process-substitution deadlocks
+LOG_FILE="/workspaces/base_pi/setup_debug.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
 
 # Export NVM & Node environment paths for both root and vscode execution
 export NVM_DIR="/usr/local/share/nvm"
@@ -34,24 +30,18 @@ fi
 echo -e "\n=============================================="
 echo " [setup] Initializing"
 
-# Completion flag (inverted liveness marker): healthcheck.sh (postStartCommand)
-# treats /opt/pi-npm-store/.provisioned as "provisioning finished successfully"
-# and waits for it on first start instead of racing the store population. It is
-# written only as the LAST step below, so under `set -e` it can never appear on
-# a failed run. Clear any pre-existing flag up front so a re-run that fails
-# midway (e.g. after the store wipe) cannot leave a stale success signal.
 rm -f /opt/pi-npm-store/.provisioned
 
-# disable closing the terminal on Ctrl+D (unless repeated 10x times)
-if ! grep -q "IGNOREEOF" ~/.bashrc; then
-    echo "export IGNOREEOF=10" >> ~/.bashrc
+# Set IGNOREEOF safely
+if [ -f /home/vscode/.bashrc ] && ! grep -q "IGNOREEOF" /home/vscode/.bashrc; then
+    echo "export IGNOREEOF=10" >> /home/vscode/.bashrc
 fi
 
 apt-get update
 
 echo "[setup] Installing GitHub CLI..."
 if ! command -v gh &> /dev/null; then
-    sudo apt-get install -o Dpkg::Use-Pty=0 -y gh
+    apt-get install -o Dpkg::Use-Pty=0 -y gh
 fi
 
 echo "[setup] APT PACKAGES INSTALL COMPLETE"
@@ -60,7 +50,7 @@ echo "[setup] Installing Pi.dev agent (pinned for reproducible rebuilds)..."
 npm install -g --allow-scripts=@google/genai,protobufjs,koffi @earendil-works/pi-coding-agent@0.87.0
 
 echo "[setup] Trusting project..."
-mkdir -p ~/.pi/agent
+mkdir -p ~/.pi/agent /home/vscode/.pi/agent
 
 if [ ! -f ~/.pi/agent/trust.json ]; then
   cat <<'EOF' >~/.pi/agent/trust.json
@@ -71,61 +61,68 @@ EOF
 fi
 
 # ---------------------------------------------------------------------------
-# 1. Configure Git authentication & identity BEFORE running pi update
+# 1. Configure Git authentication & identity
 # ---------------------------------------------------------------------------
+# Setup runs as root, but day-to-day git runs as vscode: auth must land in
+# both configs. Identity stays editor-managed; only fill gaps so we never
+# overwrite the private no-reply address VS Code already sets.
 if [ -n "$GH_TOKEN" ]; then
   echo "[setup] Configuring Git HTTPS authentication via GH_TOKEN..."
   git config --global url."https://${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+  sudo -u vscode git config --global url."https://${GH_TOKEN}@github.com/".insteadOf "https://github.com/" 2>/dev/null || true
 fi
 
-# Silence git's "detached HEAD" advice wall
 git config --global advice.detachedHead false
-git config --global user.email "nirgrahamuk@gmail.com"
-git config --global user.name "nirguk"
+sudo -u vscode git config --global advice.detachedHead false 2>/dev/null || true
+if [ -z "${GITHUB_USERNAME:-}" ]; then
+  echo "[setup] ERROR: GITHUB_USERNAME is not set. Set GITHUB_USERNAME on the host before rebuilding." >&2
+  exit 1
+fi
+if ! sudo -u vscode git config --global user.name >/dev/null 2>&1; then
+  sudo -u vscode git config --global user.name "${GITHUB_USERNAME}" 2>/dev/null || true
+fi
+if ! sudo -u vscode git config --global user.email >/dev/null 2>&1; then
+  sudo -u vscode git config --global user.email "${GITHUB_USERNAME}@users.noreply.github.com" 2>/dev/null || true
+fi
 
 # ---------------------------------------------------------------------------
-# 2. Container-native extension store setup BEFORE running pi update
+# 2. Container-native extension store setup
 # ---------------------------------------------------------------------------
 echo "[setup] Installing Pi.dev extensions from pinned .pi/settings.json..."
 
 STORE=/opt/pi-npm-store
 WS=/workspaces/base_pi
 
-# Pre-create native store directories including vendor namespaces
-mkdir -p "$STORE/npm" "$STORE/git/github.com/nirguk"
+# Owner namespace for git-backed extensions, from GITHUB_USERNAME (required above).
+GIT_OWNER="${GITHUB_USERNAME}"
 
-# Ensure workspace parent directory exists before linking
-mkdir -p "$WS/.pi/git"
+mkdir -p "$STORE/npm" "$STORE/git/github.com/$GIT_OWNER" "$WS/.pi/git"
 
-# Drop previous links OR physical dirs (idempotent)
 rm -rf "$WS/.pi/npm" "$WS/.pi/git/github.com"
 
-# Re-link workspace directories to native storage
-ln -s "$STORE/npm"          "$WS/.pi/npm"
+ln -s "$STORE/npm"           "$WS/.pi/npm"
 ln -s "$STORE/git/github.com" "$WS/.pi/git/github.com"
 
-# Clean target store contents safely without deleting the parent folders
 rm -rf "$STORE/npm"/*
-rm -rf "$STORE/git/github.com/nirguk"/*
+rm -rf "$STORE/git/github.com/$GIT_OWNER"/*
 
-# Keep git index clean for tracked placeholders
-git update-index --skip-worktree .pi/npm/.gitignore 2>/dev/null || true
+sudo -u vscode git -C "$WS" update-index --skip-worktree .pi/npm/.gitignore 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# 3. Run pi update NOW that auth and storage paths are fully in place
+# 3. Run pi update
 # ---------------------------------------------------------------------------
 echo "about to pi update"
 pi update --extensions --approve
 echo "finished pi update"
 
 # ---------------------------------------------------------------------------
-# Pinned project npm packages: install deterministically, then verify.
+# Pinned project npm packages
 # ---------------------------------------------------------------------------
 NPM_SPECS_SCRIPT="const s=require('$WS/.pi/settings.json');for(const p of s.packages||[]){const src=typeof p==='string'?p:(p&&p.source);if(src&&src.startsWith('npm:'))console.log(src)}"
 
-MAX_WAIT=120      # verification backstop (s)
-POLL=2            # poll interval (s)
-STABLE_ROUNDS=3   # consecutive stable polls required before declaring done
+MAX_WAIT=120
+POLL=2
+STABLE_ROUNDS=3
 
 unresolved_of() {
   local out="" spec name ver got
@@ -148,7 +145,6 @@ unresolved_of() {
 PROJECT_NPM_SPECS=$(printf '%s' "$(node -e "$NPM_SPECS_SCRIPT" 2>/dev/null)" | sed -n 's#^npm:##p' | tr '\n' ' ')
 if [ -n "$PROJECT_NPM_SPECS" ]; then
   echo "[setup] Installing pinned project npm packages: $PROJECT_NPM_SPECS"
-  # shellcheck disable=SC2086
   ( cd "$STORE/npm" && npm install --no-audit --no-fund $PROJECT_NPM_SPECS )
 fi
 
@@ -181,19 +177,12 @@ fi
 echo "[setup] npm store verified populated (pinned npm packages resolve)."
 
 # ---------------------------------------------------------------------------
-# Harness Python tooling — uv + the /opt venv (harnesskit and friends)
+# Harness Python tooling
 # ---------------------------------------------------------------------------
-# The harness's own Python dependencies (a uv-managed pyproject.toml at the
-# workspace root) live on container-native storage for the same I/O reasons
-# as the npm store: the workspace keeps a .venv symlink to /opt/base-pi-venv.
-# Guarded on uv + pyproject presence so pre-uv images degrade gracefully.
 if command -v uv >/dev/null 2>&1 && [ -f "$WS/pyproject.toml" ]; then
   VENV_STORE=/opt/base-pi-venv
-  # uv-provisioned interpreters must land on shared storage, never in the
-  # provisioning user's home: a venv whose bin/python symlinks into /root is
-  # unexecutable by the vscode user (healthcheck check 11, the 10 Sep bug).
   export UV_PYTHON_INSTALL_DIR=/opt/uv-python
-  rm -f "$WS/.venv"   # the link only, never the store (no trailing slash)
+  rm -f "$WS/.venv"
   if [ ! -x "$VENV_STORE/bin/python" ]; then
     uv venv "$VENV_STORE"
   fi
@@ -204,31 +193,52 @@ fi
 # ---------------------------------------------------------------------------
 # Cross-container tooling
 # ---------------------------------------------------------------------------
-ln -sf "$WS/.pi/scripts/pi-run" /usr/local/bin/pi-run
-ln -sf "$WS/.pi/scripts/pi-projects.js" /usr/local/bin/pi-projects
+ln -sf "$WS/.pi/scripts/pi-run" /usr/local/bin/pi-run 2>/dev/null || true
+ln -sf "$WS/.pi/scripts/pi-projects.js" /usr/local/bin/pi-projects 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# UID 1000 (vscode) ownership alignment
+# Permissions alignment
 # ---------------------------------------------------------------------------
 if [ -d "/root/.pi" ]; then
-    mkdir -p /home/vscode/.pi
     cp -r /root/.pi/* /home/vscode/.pi/ 2>/dev/null || true
 fi
 
-for DIR in "$WS" /opt/pi-npm-store /opt/base-pi-venv /opt/uv-python /home/vscode/.pi; do
+# Only chown container-native paths recursively. 
+# DO NOT chown $WS recursively across bind mounts.
+# --from=root:root skips files already owned by vscode, so re-runs stay fast.
+for DIR in /opt/pi-npm-store /opt/base-pi-venv /opt/uv-python /home/vscode/.pi; do
     if [ -d "$DIR" ]; then
-        chown -R vscode:vscode "$DIR"
+        chown -R --from=root:root vscode:vscode "$DIR"
     fi
 done
+
+# Touch top-level workspace files only if needed, or chown without -R
+chown vscode:vscode "$WS"
+
+# Avoid recursive chown on /home/vscode if .cache/ stores thousands of extension files.
+# .pi is already covered above; .bashrc is a single file.
+chown --from=root:root vscode:vscode /home/vscode/.bashrc 2>/dev/null || true
 
 for FILE in /usr/local/bin/pi-run /usr/local/bin/pi-projects; do
     if [ -f "$FILE" ]; then
-        chown vscode:vscode "$FILE"
+        chown vscode:vscode "$FILE" 2>/dev/null || true
     fi
 done
 
-chown -R vscode:vscode /home/vscode
+# Safety net: fix only stray root-owned files under home (no-op when clean).
+# This replaces the old `chown -R /home/vscode`, which re-touched every file
+# including .vscode-server and .cache on each run.
+find /home/vscode -user root -exec chown vscode:vscode {} + 2>/dev/null || true
+
+# Setup runs as root, so the git index can end up root-owned; vscode then
+# cannot write to it. Fix just that file instead of the whole checkout.
+if [ -f "$WS/.git/index" ]; then
+    chown --from=root:root vscode:vscode "$WS/.git/index" 2>/dev/null || true
+fi
 
 echo "[setup] Pi.dev environment ready."
-
 touch "$STORE/.provisioned"
+
+# Force flush standard streams to end process-substitution safely
+exec 1>&- 2>&-
+wait
