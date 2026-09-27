@@ -7,6 +7,7 @@
   "remoteUser": "vscode",
   "mounts": [
     "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
+    "source=${localEnv:BASE_FOLDER}/image_forge,target=/workspaces/image_forge,type=bind",
     "source=${localEnv:BASE_FOLDER}/congruent_roster,target=/workspaces/congruent_roster,type=bind",
     "source=${localEnv:BASE_FOLDER}/nirgraham_career,target=/workspaces/nirgraham_career,type=bind",
     "source=${localEnv:BASE_FOLDER}/penpalagent,target=/workspaces/penpalagent,type=bind",
