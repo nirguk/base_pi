@@ -13,6 +13,14 @@
       "label": "image_forge",
       "exts": [".py"],
       "containerPath": "/workspaces/image_forge"
+    },
+    "/workspaces/congruent_roster": {
+      "alias": "congruent_roster",
+      "label": "congruent_roster",
+      "exts": [".py"],
+      "containerPath": "/workspaces/congruent_roster",
+      "mapCommand": ["python3", "tools/methodmap.py", "."],
+      "mapTimeoutMs": 120000
     }
   }
 }

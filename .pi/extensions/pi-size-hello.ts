@@ -56,6 +56,8 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createRequire } from "node:module";
 
+// docker needs sudo in this setup (same as container_exec.ts: sudo -n docker).
+
 type ProjectConfig = {
 	alias: string;
 	label: string;
@@ -143,8 +145,8 @@ function dockerExec(
 ): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const child = execFile(
-			"docker",
-			["exec", "-u", user, "-w", cwd, container, ...command],
+			"sudo",
+			["-n", "docker", "exec", "-u", user, "-w", cwd, container, ...command],
 			{ timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 },
 			(error, stdout, stderr) => {
 				if (error) reject(new Error(String(stderr || error.message)));
