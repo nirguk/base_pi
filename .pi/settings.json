@@ -60,7 +60,8 @@
     },
     "git:github.com/nirguk/pi-diffy@v0.2.0",
     "git:github.com/nirguk/pi-audit",
-    "npm:mattpocock-skills-unofficial-plugin@1.2.0-omp.1"
+    "npm:mattpocock-skills-unofficial-plugin@1.2.0-omp.1",
+    "npm:remote-pi"
   ],
   "skills": [
     "s",
