@@ -21,6 +21,8 @@ pi-llm-debugging/
 .pi/run-history.jsonl
 .pi/missions
 .pi/projects.json
+.pi/crashes.json
+.pi/remote-pi/
 
 # runtime symlinks created by .devcontainer/setup.sh (tracked placeholder dirs
 # stay in the index; the symlinks themselves are container-local artifacts)
