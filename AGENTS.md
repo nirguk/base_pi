@@ -310,6 +310,18 @@ full pattern.
   const { what_projects } = require('/workspaces/base_pi/.pi/scripts/pi-projects.js');
   ```
 
+## remote-pi runbook
+
+Operational facts about the mobile/remote-pi setup, learned the hard way. Keep these accurate if you change the machinery.
+
+- **Who handles the relay.** The external relay (docker + Tailscale on the host) is separate from the Pi-side machinery. `pi-supervisord` is a *process manager only* — it holds **no relay socket**. The relay/mobile link is held by each **daemon** (`pi --mode rpc` with `auto_start_relay`), so every running daemon opens its own connection. To find the actual relay holder: `ss -tnp | grep <tailnet-ip>:443`.
+- **Agent identity is per-folder, not global.** Name resolution order: broker-assigned name (mesh) → `agent_name` in `<folder>/.pi/remote-pi/config.json` → folder basename. One config file per folder, so **distinct custom names require distinct folders**; two agents in the same folder share the name and the broker adds `#N`. The room (and thus the mobile tile) is keyed on `(cwd, name)`.
+- **The `#N` suffix is a session ordinal, not a PID** — don't confuse it with a process. `Ziggy#2`/`#3` is the same relay re-advertising a higher session ordinal, not a freshly-spawned process.
+- **Process ↔ folder = cwd.** A daemon's `cwd` is its identity anchor. To answer "which process is which": `readlink /proc/<pid>/cwd` plus `pgrep -af pi`.
+- **A supervised daemon stuck at `crashed / restarts=N` is usually a name collision** — another live agent owns the name in that folder — not a real bug. Supervisord crash-restarts with backoff then gives up.
+- **Container caveats (no systemd):** `remote-pi install` (system service) won't work; run `pi-supervisord` as a detached background process. Two gotchas with headless daemons: the `daemon send` CLI **rejects embedded newlines** in the prompt (collapse them), and a daemon may not process `daemon send` as a normal prompt — **use `agent_send` (agent-network) to reach a daemon reliably**, and keep the full brief in a file on the shared container that the agent can read.
+- **Spawn/naming controls:** `remote-pi create <cwd> --name X` + `daemon start` for a supervised named daemon; `/remote-pi rename` is a live mesh soft-rejoin, versus the persisted `agent_name` (next start). Our extension adds `remote_spawn`/`remote_rename`, and the pattern-2 rule: spawn into `<base>/.spawns/<name>` for a distinct name without clobbering the base folder's existing agent.
+
 ## Before Finishing
 
 - Re-read your diff: check example commands for typos — tool flags are easy to get wrong (this file has had one).
