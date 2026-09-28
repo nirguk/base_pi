@@ -24,6 +24,9 @@ pi-llm-debugging/
 .pi/crashes.json
 .pi/remote-pi/
 
+# remote-pi spawned agent folders (pattern-2 dedicated per-name dirs)
+.spawns/
+
 # runtime symlinks created by .devcontainer/setup.sh (tracked placeholder dirs
 # stay in the index; the symlinks themselves are container-local artifacts)
 .pi/npm
