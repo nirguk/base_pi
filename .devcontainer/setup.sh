@@ -67,9 +67,17 @@ fi
 # both configs. Identity stays editor-managed; only fill gaps so we never
 # overwrite the private no-reply address VS Code already sets.
 if [ -n "$GH_TOKEN" ]; then
-  echo "[setup] Configuring Git HTTPS authentication via GH_TOKEN..."
-  git config --global url."https://${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
-  sudo -u vscode git config --global url."https://${GH_TOKEN}@github.com/".insteadOf "https://github.com/" 2>/dev/null || true
+  echo "[setup] Configuring Git HTTPS authentication via GH_TOKEN (credential helper, keeps remote URL clean)..."
+  # Clear any legacy token-embedding insteadOf rewrites from earlier setups.
+  for _key in $(git config --global --name-only --get-regexp '^url\..*\.insteadOf$' 2>/dev/null || true); do
+    git config --global --unset-all "$_key" 2>/dev/null || true
+  done
+  for _key in $(sudo -u vscode git config --global --name-only --get-regexp '^url\..*\.insteadOf$' 2>/dev/null || true); do
+    sudo -u vscode git config --global --unset-all "$_key" 2>/dev/null || true
+  done
+  _helper='!f() { echo "username=${GITHUB_USERNAME:-x-access-token}"; echo "password=$GH_TOKEN"; }; f'
+  git config --global credential.helper "$_helper"
+  sudo -u vscode git config --global credential.helper "$_helper" 2>/dev/null || true
 fi
 
 git config --global advice.detachedHead false
