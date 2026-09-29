@@ -138,11 +138,18 @@ unresolved_of() {
     [ -z "$spec" ] && continue
     case "$spec" in
       npm:*)
-        name=${spec#npm:}; name=${name%@*}
-        ver=${spec##*@}
+        rest=${spec#npm:}
+        case "$rest" in
+          @*@?*@*) ver=${rest##*@}; name=${rest%@*} ;;
+          @*) ver=""; name="$rest" ;;
+          *@*) ver=${rest##*@}; name=${rest%@*} ;;
+          *) ver=""; name="$rest" ;;
+        esac
         got=$(node -p "try{require('$STORE/npm/node_modules/$name/package.json').version}catch(e){''}" 2>/dev/null)
-        if [ -z "$got" ] || [ "$got" != "$ver" ]; then
-          out="$out $name@$ver(installed:${got:-missing})"
+        if [ -z "$got" ]; then
+          out="$out $name@${ver:-any}(installed:missing)"
+        elif [ -n "$ver" ] && [ "$got" != "$ver" ]; then
+          out="$out $name@$ver(installed:$got)"
         fi
         ;;
     esac
@@ -160,6 +167,7 @@ start_ts=$(date +%s)
 unresolved=""
 stable=0
 lock_mtime_first=0
+echo "[setup] Verifying npm store (up to ${MAX_WAIT}s, polling every ${POLL}s)..."
 while :; do
   mtime=$(stat -c %Y "$STORE/npm/package-lock.json" 2>/dev/null || echo 0)
   if [ "$mtime" != "0" ] && [ "$mtime" = "$lock_mtime_first" ]; then
@@ -174,8 +182,10 @@ while :; do
   unresolved=$(unresolved_of)
   [ -z "$unresolved" ] && [ "$stable" -ge "$STABLE_ROUNDS" ] && break
   [ "$(date +%s)" -ge "$(( start_ts + MAX_WAIT ))" ] && break
+  printf '.'
   sleep "$POLL"
 done
+printf '\n'
 
 if [ -n "$unresolved" ]; then
   echo "[setup] ERROR: npm store still incomplete after ${MAX_WAIT}s:${unresolved}" >&2
