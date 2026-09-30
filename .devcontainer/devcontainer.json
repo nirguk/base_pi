@@ -14,7 +14,8 @@
     "source=${localEnv:BASE_FOLDER}/pi-audit,target=/workspaces/pi-audit,type=bind",
     "source=${localEnv:BASE_FOLDER}/dsh_cv,target=/workspaces/dsh_cv,type=bind",
     "source=${localEnv:BASE_FOLDER}/c#/PlantWise,target=/workspaces/PlantWise,type=bind",
-    "source=${localEnv:BASE_FOLDER}/pi_remote_relay,target=/workspaces/pi_remote_relay,type=bind"
+    "source=${localEnv:BASE_FOLDER}/pi_remote_relay,target=/workspaces/pi_remote_relay,type=bind",
+    "source=${localEnv:BASE_FOLDER}/household_accounting,target=/workspaces/household_accounting,type=bind"
   ],
   "runArgs": [],
   "features": {
