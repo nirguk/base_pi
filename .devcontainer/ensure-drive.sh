@@ -25,4 +25,13 @@ $SUDO ssh-keygen -A >/dev/null 2>&1 || true
 if ! (echo > /dev/tcp/127.0.0.1/2222) >/dev/null 2>&1; then
   $SUDO /usr/sbin/sshd -p 2222
 fi
+# remote-pi supervisor (daemon manager behind remote_spawn): restart if down.
+SUP_BIN=/workspaces/base_pi/.pi/npm/node_modules/.bin/pi-supervisord
+if [ -x "$SUP_BIN" ] && ! node /workspaces/base_pi/.pi/npm/node_modules/remote-pi/dist/index.js daemon status >/dev/null 2>&1; then
+  if [ "$IS_ROOT" = "yes" ]; then
+    setsid sudo -u vscode nohup "$SUP_BIN" >/tmp/pi-supervisord.log 2>&1 < /dev/null &
+  else
+    (setsid nohup "$SUP_BIN" >/tmp/pi-supervisord.log 2>&1 < /dev/null &)
+  fi
+fi
 echo "[ensure-drive] ssh:2222 + tmux ready"
