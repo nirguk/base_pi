@@ -13,12 +13,14 @@ if ! command -v tmux >/dev/null 2>&1 || ! command -v sshd >/dev/null 2>&1; then
   $SUDO apt-get install -y -qq tmux openssh-server
 fi
 
-if [ "$IS_ROOT" = "yes" ]; then
-  grep -q 'set -g mouse on' /home/vscode/.tmux.conf 2>/dev/null || echo 'set -g mouse on' >> /home/vscode/.tmux.conf
-  chown vscode:vscode /home/vscode/.tmux.conf
-else
-  grep -q 'set -g mouse on' ~/.tmux.conf 2>/dev/null || echo 'set -g mouse on' >> ~/.tmux.conf
-fi
+for _line in 'set -g mouse on' 'set -s extended-keys on' 'set -as terminal-features ",xterm*:extkeys"'; do
+  if [ "$IS_ROOT" = "yes" ]; then
+    grep -qxF "$_line" /home/vscode/.tmux.conf 2>/dev/null || echo "$_line" >> /home/vscode/.tmux.conf
+  else
+    grep -qxF "$_line" ~/.tmux.conf 2>/dev/null || echo "$_line" >> ~/.tmux.conf
+  fi
+done
+[ "$IS_ROOT" = "yes" ] && chown vscode:vscode /home/vscode/.tmux.conf
 
 $SUDO mkdir -p /run/sshd
 $SUDO ssh-keygen -A >/dev/null 2>&1 || true
