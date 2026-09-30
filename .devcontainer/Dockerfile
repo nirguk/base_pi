@@ -8,6 +8,8 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
         bash \
         ca-certificates \
         docker.io \
+        tmux \
+        openssh-server \
     && rm -rf /var/lib/apt/lists/*
 
 # uv (Astral) package manager, pinned to 0.12.12 — the same version the

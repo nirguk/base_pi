@@ -38,3 +38,4 @@ pi_perf/llm-debug.sqlite
 .agent_audit.db
 .hk/
 .pi/google-chrome-for-testing/Crash Reports/settings.dat
+.pi-ssh/

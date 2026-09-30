@@ -23,7 +23,7 @@
     }
   },
   "postCreateCommand": "./.devcontainer/setup.sh",
-  "postStartCommand": "./.devcontainer/healthcheck.sh",
+  "postStartCommand": "./.devcontainer/ensure-drive.sh; ./.devcontainer/healthcheck.sh",
   "customizations": {
     "vscode": {
       "extensions": []

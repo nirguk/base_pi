@@ -125,3 +125,27 @@ Harness pi runs as `vscode` (uid 1000) — the same uid as project containers' e
 user — so files pi creates on the bind-mount are owned by uid 1000 and editable
 from the project window. `setup.sh` re-applies `chown -R vscode:vscode` to the
 workspace, `/opt/pi-npm-store`, and `/home/vscode/.pi` on every (re)build.
+## drive — sit in the project, run here (ssh + tmux)
+
+One-word habit for project-focused work with the full `pi` screen:
+
+1. Open the project in VS Code (its files and diffs are around you).
+2. In its terminal, once ever: `echo "alias drive='$(pwd)/.pi-ssh/drive'" >> ~/.bashrc; source ~/.bashrc`
+3. From then on: `drive` — attaches that terminal to this window over ssh,
+   into a tmux session named `<alias>-link` (created on first arrival).
+4. Type `pi` there for the full screen. Detach by closing the terminal;
+   the session keeps running here. Reattach with the same word.
+
+Notes:
+
+- The wheel needs tmux mouse mode once per fresh server: Ctrl-b then
+  `:set -g mouse on`. New servers start with it via `~/.tmux.conf`.
+- The address this window is reachable at can change across restarts;
+  re-run `.pi/scripts/drive-provision.sh` here to refresh it (keys are kept).
+- Generated files live in `<project>/.pi-ssh/` (key, address, script) and are
+  gitignored in every project — generated, never committed. The canonical
+  keypair sits in `base_pi/.pi-ssh/` (also gitignored).
+- Rebuild-proofing: `Dockerfile` bakes in tmux + openssh-server,
+  `setup.sh` reruns `ensure-drive.sh` + `drive-provision.sh`, and
+  `postStartCommand` restarts sshd on every container start.
+- Phone access is unchanged: it still goes through the relay on this side.

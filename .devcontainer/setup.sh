@@ -215,6 +215,13 @@ ln -sf "$WS/.pi/scripts/pi-run" /usr/local/bin/pi-run 2>/dev/null || true
 ln -sf "$WS/.pi/scripts/pi-projects.js" /usr/local/bin/pi-projects 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
+# drive workflow (ssh + tmux): any project terminal can attach here with `drive`
+# ---------------------------------------------------------------------------
+apt-get install -o Dpkg::Use-Pty=0 -y tmux openssh-server
+bash "$WS/.devcontainer/ensure-drive.sh"
+sudo -u vscode bash "$WS/.pi/scripts/drive-provision.sh"
+
+# ---------------------------------------------------------------------------
 # Permissions alignment
 # ---------------------------------------------------------------------------
 if [ -d "/root/.pi" ]; then
