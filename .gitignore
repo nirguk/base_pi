@@ -39,3 +39,4 @@ pi_perf/llm-debug.sqlite
 .hk/
 .pi/google-chrome-for-testing/Crash Reports/settings.dat
 .pi-ssh/
+.pi/remote-backup/

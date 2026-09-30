@@ -22,8 +22,24 @@ fi
 
 $SUDO mkdir -p /run/sshd
 $SUDO ssh-keygen -A >/dev/null 2>&1 || true
+# Tailnet relay name does not resolve from inside the container (Docker DNS),
+# so pin it to the desktop's tailnet IP. Refresh the IP here if it ever changes.
+if ! grep -q 'desktop-gvknaqk.tail6bdf63.ts.net' /etc/hosts 2>/dev/null; then
+  echo '100.92.231.45 desktop-gvknaqk.tail6bdf63.ts.net' | $SUDO tee -a /etc/hosts >/dev/null
+fi
 if ! (echo > /dev/tcp/127.0.0.1/2222) >/dev/null 2>&1; then
   $SUDO /usr/sbin/sshd -p 2222
+fi
+# remote-pi durability: identity, relay URL, pairings, daemon registry all live
+# in container-home (~/.pi/remote) and would vanish on rebuild. Mirror them to a
+# host-mounted backup: restore what's missing, then refresh the mirror.
+RBACKUP=/workspaces/base_pi/.pi/remote-backup
+RHOME=/home/vscode/.pi/remote
+if [ -d "$RBACKUP" ]; then
+  mkdir -p "$RHOME"
+  for f in identity.json config.json peers.json daemons.json; do
+    [ -f "$RBACKUP/$f" ] && [ ! -f "$RHOME/$f" ] && cp "$RBACKUP/$f" "$RHOME/$f"
+  done
 fi
 # remote-pi supervisor (daemon manager behind remote_spawn): restart if down.
 SUP_BIN=/workspaces/base_pi/.pi/npm/node_modules/.bin/pi-supervisord
@@ -35,3 +51,11 @@ if [ -x "$SUP_BIN" ] && ! node /workspaces/base_pi/.pi/npm/node_modules/remote-p
   fi
 fi
 echo "[ensure-drive] ssh:2222 + tmux ready"
+# Refresh the remote-pi backup mirror (home wins when newer).
+if [ -d "$RHOME" ]; then
+  mkdir -p "$RBACKUP"
+  for f in identity.json config.json peers.json daemons.json; do
+    [ -f "$RHOME/$f" ] && cp -u "$RHOME/$f" "$RBACKUP/$f"
+  done
+fi
+chown -R vscode:vscode "$RBACKUP" 2>/dev/null || true

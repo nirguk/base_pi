@@ -11,6 +11,9 @@
  *   /remote-model   + tool remote_set_model   (switch live LLM model)
  *   /remote-spawn   + tool remote_spawn       (spawn a fresh named headless agent, phone can reach it)
  *   /remote-rename  + tool remote_rename      (set a workspace's persisted remote-pi agent name)
+ *   /remote-status  + tool remote_status      (fleet status: supervisor + daemons)
+ *   /remote-peers   + tool remote_peers       (local + cross-PC mesh roster)
+ *   /remote-fleet   + tool remote_fleet       (start/stop/restart daemon fleet)
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -270,6 +273,100 @@ export default function (pi: ExtensionAPI) {
 			}
 			ensureRemotePiConfig(cwd, name);
 			ctx.ui.notify(`Set ${cwd}/.pi/remote-pi/config.json agent_name to "${name}"`, "info");
+		},
+	});
+
+	// ---------- fleet status ----------
+	pi.registerCommand("remote-status", {
+		description: "Show remote-pi fleet status (supervisor + daemons)",
+		handler: async (_args, ctx) => {
+			try {
+				ctx.ui.notify(runRemotePi(["daemon", "status"]), "info");
+			} catch (err) {
+				ctx.ui.notify(`Supervisor not running: ${String(err).split("\n")[0]}`, "warning");
+			}
+		},
+	});
+	pi.registerTool({
+		name: "remote_status",
+		label: "Remote Fleet Status",
+		description:
+			"Show remote-pi fleet status (supervisor liveness + daemon pids/uptime/restarts). Use when checking whether agents are alive, before spawning, or when the phone reports everything offline.",
+		parameters: Type.Object({}),
+		async execute() {
+			try {
+				return { content: [{ type: "text", text: runRemotePi(["daemon", "status"]) }] };
+			} catch (err) {
+				return { content: [{ type: "text", text: `Supervisor not running: ${String(err).split("\n")[0]}. Start pi-supervisord (ensure-drive.sh does this on boot).` }] };
+			}
+		},
+	});
+
+	// ---------- mesh roster ----------
+	pi.registerCommand("remote-peers", {
+		description: "List agents on the local + cross-PC mesh",
+		handler: async (_args, ctx) => {
+			try {
+				ctx.ui.notify(runRemotePi(["peers"]), "info");
+			} catch (err) {
+				ctx.ui.notify(`Could not list peers: ${String(err).split("\n")[0]}`, "warning");
+			}
+		},
+	});
+	pi.registerTool({
+		name: "remote_peers",
+		label: "Remote Mesh Peers",
+		description:
+			"List agents on the local + cross-PC mesh. Use to see who is online, spot duplicate/ghost names (e.g. plantwise#2), and confirm a side before messaging it.",
+		parameters: Type.Object({}),
+		async execute() {
+			try {
+				return { content: [{ type: "text", text: runRemotePi(["peers"]) }] };
+			} catch (err) {
+				return { content: [{ type: "text", text: `Could not list peers: ${String(err).split("\n")[0]}` }] };
+			}
+		},
+	});
+
+	// ---------- fleet control ----------
+	pi.registerCommand("remote-fleet", {
+		description: "Control the daemon fleet: /remote-fleet <start|stop|restart> [id]",
+		handler: async (args, ctx) => {
+			const parts = args.trim().split(/\s+/).filter(Boolean);
+			const op = parts[0];
+			if (op !== "start" && op !== "stop" && op !== "restart") {
+				ctx.ui.notify(`Usage: /remote-fleet <start|stop|restart> [id]`, "error");
+				return;
+			}
+			try {
+				const argv = ["daemon", op];
+				if (parts[1]) argv.push(parts[1]);
+				ctx.ui.notify(runRemotePi(argv), "info");
+			} catch (err) {
+				ctx.ui.notify(`Fleet ${op} failed: ${String(err).split("\n")[0]}`, "error");
+			}
+		},
+	});
+	pi.registerTool({
+		name: "remote_fleet",
+		label: "Remote Fleet Control",
+		description:
+			"Start, stop, or restart remote-pi daemons (the always-on agents, e.g. basepi). Optional id targets one daemon; omitted applies to the whole fleet. Use to revive a dead always-on presence or cycle one onto a new relay URL after set-relay.",
+		parameters: Type.Object({
+			op: Type.Union([Type.Literal("start"), Type.Literal("stop"), Type.Literal("restart")], {
+				description: "Fleet operation",
+			}),
+			id: Type.Optional(Type.String({ description: "Daemon id (omit for whole fleet)" })),
+		}),
+		async execute(_id, params) {
+			const { op, id } = params as { op: string; id?: string };
+			const argv = ["daemon", op];
+			if (id) argv.push(id);
+			try {
+				return { content: [{ type: "text", text: runRemotePi(argv) }] };
+			} catch (err) {
+				return { content: [{ type: "text", text: `Fleet ${op} failed: ${String(err).split("\n")[0]}` }] };
+			}
 		},
 	});
 }
