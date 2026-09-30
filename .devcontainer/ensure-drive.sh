@@ -43,7 +43,9 @@ if [ -d "$RBACKUP" ]; then
 fi
 # remote-pi supervisor (daemon manager behind remote_spawn): restart if down.
 SUP_BIN=/workspaces/base_pi/.pi/npm/node_modules/.bin/pi-supervisord
-if [ -x "$SUP_BIN" ] && ! node /workspaces/base_pi/.pi/npm/node_modules/remote-pi/dist/index.js daemon status >/dev/null 2>&1; then
+# NOTE: `daemon status` exits 0 even when the supervisor is down, so the guard
+# must be the socket itself, not the command's exit code.
+if [ -x "$SUP_BIN" ] && [ ! -S /home/vscode/.pi/remote/supervisor.sock ]; then
   if [ "$IS_ROOT" = "yes" ]; then
     setsid sudo -u vscode nohup "$SUP_BIN" >/tmp/pi-supervisord.log 2>&1 < /dev/null &
   else
