@@ -149,3 +149,13 @@ Notes:
   `setup.sh` reruns `ensure-drive.sh` + `drive-provision.sh`, and
   `postStartCommand` restarts sshd on every container start.
 - Phone access is unchanged: it still goes through the relay on this side.
+
+## Building a project container from the harness (no VS Code build needed)
+
+`devcontainer up --workspace-folder /workspaces/<alias>` works from here with
+two shims: a `docker` wrapper calling `sudo -n docker` (the socket is
+root-only), and `BASE_FOLDER` exported as the desktop path so `${localEnv:…}`
+expands to host addresses. One catch: the CLI takes `--workspace-folder`
+verbatim as the bind source, which the desktop daemon cannot use — add a
+temporary explicit `workspaceMount` with the `C:/…` source for the build, then
+remove it afterwards so the file matches the family shape again.
